@@ -1,0 +1,8 @@
+# Zeilenenden normalisieren
+* text=auto
+
+# Shell-Skripte müssen LF behalten (sonst bricht der Shebang auf Linux)
+*.sh text eol=lf
+# systemd-Units ebenfalls LF
+*.service text eol=lf
+*.timer text eol=lf
