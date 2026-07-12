@@ -14,10 +14,10 @@ const MODULE_ID = "git-object-sync";
 
 /** Konfiguration je Dokumenttyp. */
 const TYPE_CONFIG = {
-  Actor: { folder: "actors", collection: () => game.actors, renderHook: "renderActorDirectory", contextHook: "getActorDirectoryEntryContext" },
-  Item: { folder: "items", collection: () => game.items, renderHook: "renderItemDirectory", contextHook: "getItemDirectoryEntryContext" },
-  Scene: { folder: "scenes", collection: () => game.scenes, renderHook: "renderSceneDirectory", contextHook: "getSceneDirectoryEntryContext" },
-  JournalEntry: { folder: "journal", collection: () => game.journal, renderHook: "renderJournalDirectory", contextHook: "getJournalDirectoryEntryContext" }
+  Actor: { folder: "actors", collection: () => game.actors, uiKey: "actors", renderHook: "renderActorDirectory", contextHook: "getActorDirectoryEntryContext" },
+  Item: { folder: "items", collection: () => game.items, uiKey: "items", renderHook: "renderItemDirectory", contextHook: "getItemDirectoryEntryContext" },
+  Scene: { folder: "scenes", collection: () => game.scenes, uiKey: "scenes", renderHook: "renderSceneDirectory", contextHook: "getSceneDirectoryEntryContext" },
+  JournalEntry: { folder: "journal", collection: () => game.journal, uiKey: "journal", renderHook: "renderJournalDirectory", contextHook: "getJournalDirectoryEntryContext" }
 };
 
 /* -------------------------------------------------------------------------- */
@@ -40,6 +40,29 @@ function syncMode() {
 /** Sollen referenzierte Assets (Bilder, Maps, Audio) mitsynchronisiert werden? */
 function syncAssets() {
   return game.settings.get(MODULE_ID, "syncAssets");
+}
+
+/**
+ * Fortschrittsanzeige über die eingebaute Foundry-Ladeleiste (oben mittig).
+ * Liefert ein Objekt mit update(fraction 0..1, message) und done(message).
+ * Fällt still zurück, falls die Ladeleiste nicht verfügbar ist.
+ */
+function makeProgress(label) {
+  const show = (pct, msg) => {
+    try {
+      SceneNavigation.displayProgressBar({
+        label: msg ?? label,
+        pct: Math.round(Math.max(0, Math.min(100, pct)))
+      });
+    } catch (err) {
+      /* Ladeleiste nicht verfügbar -> ignorieren. */
+    }
+  };
+  show(0, label);
+  return {
+    update: (fraction, msg) => show(fraction * 100, msg),
+    done: (msg) => show(100, msg)
+  };
 }
 
 /** Dateinamen sicher machen (keine Sonderzeichen, keine Leerzeichen). */
@@ -168,6 +191,7 @@ async function ghApi(path, { method = "GET", body } = {}) {
   if (!token) throw new Error(t("GOS.Notify.NoToken"));
   const res = await fetch(`https://api.github.com${path}`, {
     method,
+    cache: "no-store", // sonst liefert der Browser beim erneuten Lesen des Branch-Tips einen veralteten (gecachten) Stand
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/vnd.github+json",
@@ -184,7 +208,7 @@ async function ghApi(path, { method = "GET", body } = {}) {
 }
 
 /** Mehrere Dateien in einem einzigen Commit hochladen (Git-Data-API). */
-async function githubPushFiles(files, message) {
+async function githubPushFiles(files, message, onProgress = null) {
   const { repo, branch } = ghConfig();
   if (!repo.includes("/")) throw new Error(t("GOS.Notify.BadRepo"));
 
@@ -196,9 +220,26 @@ async function githubPushFiles(files, message) {
     const commit = await ghApi(`/repos/${repo}/git/commits/${baseSha}`);
     baseTree = commit.tree.sha;
   } catch (err) {
-    // Branch/Repo noch leer -> ohne Basis fortfahren (initialer Commit).
-    baseSha = null;
-    baseTree = null;
+    // Repo/Branch noch leer. Ein komplett leeres Repo (kein einziger Commit)
+    // lehnt die Git-Data-API mit 409 ab -> ersten Commit per Contents-API anlegen.
+    try {
+      await ghApi(`/repos/${repo}/contents/.gitkeep`, {
+        method: "PUT",
+        body: {
+          message: "Git Object Sync: Repository initialisiert",
+          content: "",
+          branch
+        }
+      });
+      const ref = await ghApi(`/repos/${repo}/git/ref/heads/${branch}`);
+      baseSha = ref.object.sha;
+      const commit = await ghApi(`/repos/${repo}/git/commits/${baseSha}`);
+      baseTree = commit.tree.sha;
+    } catch (err2) {
+      // Fallback: ohne Basis fortfahren (initialer Commit via Git-Data-API).
+      baseSha = null;
+      baseTree = null;
+    }
   }
 
   const tree = [];
@@ -208,23 +249,58 @@ async function githubPushFiles(files, message) {
       : { content: f.text, encoding: "utf-8" };
     const blob = await ghApi(`/repos/${repo}/git/blobs`, { method: "POST", body: blobBody });
     tree.push({ path: f.path, mode: "100644", type: "blob", sha: blob.sha });
+    onProgress?.(tree.length, files.length + 1);
   }
 
-  const newTree = await ghApi(`/repos/${repo}/git/trees`, {
-    method: "POST",
-    body: { ...(baseTree ? { base_tree: baseTree } : {}), tree }
-  });
-  const commit = await ghApi(`/repos/${repo}/git/commits`, {
-    method: "POST",
-    body: { message, tree: newTree.sha, parents: baseSha ? [baseSha] : [] }
-  });
+  // Aktuellen Branch-Stand (Tip-Commit + zugehörigen Baum) frisch lesen.
+  const readBase = async () => {
+    const ref = await ghApi(`/repos/${repo}/git/ref/heads/${branch}`);
+    const sha = ref.object.sha;
+    const commit = await ghApi(`/repos/${repo}/git/commits/${sha}`);
+    return { sha, tree: commit.tree.sha };
+  };
 
-  if (baseSha) {
-    await ghApi(`/repos/${repo}/git/refs/heads/${branch}`, { method: "PATCH", body: { sha: commit.sha } });
-  } else {
-    await ghApi(`/repos/${repo}/git/refs`, { method: "POST", body: { ref: `refs/heads/${branch}`, sha: commit.sha } });
+  // Commit anlegen und Ref setzen. Wenn der Branch zwischenzeitlich fortgeschrieben
+  // wurde ("Update is not a fast forward", 422), holen wir den neuen Stand und
+  // setzen unseren Commit darauf neu auf (Rebase auf den aktuellen Tip). Zwischen
+  // den Versuchen warten wir kurz (Backoff), damit GitHub den neuen Ref-Stand
+  // zuverlässig ausliefert und ein evtl. gleichzeitiger Server-Sync durchläuft.
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const maxAttempts = 8;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const newTree = await ghApi(`/repos/${repo}/git/trees`, {
+      method: "POST",
+      body: { ...(baseTree ? { base_tree: baseTree } : {}), tree }
+    });
+    const commit = await ghApi(`/repos/${repo}/git/commits`, {
+      method: "POST",
+      body: { message, tree: newTree.sha, parents: baseSha ? [baseSha] : [] }
+    });
+
+    try {
+      if (baseSha) {
+        await ghApi(`/repos/${repo}/git/refs/heads/${branch}`, { method: "PATCH", body: { sha: commit.sha } });
+      } else {
+        await ghApi(`/repos/${repo}/git/refs`, { method: "POST", body: { ref: `refs/heads/${branch}`, sha: commit.sha } });
+      }
+      onProgress?.(files.length + 1, files.length + 1);
+      return commit.sha;
+    } catch (err) {
+      lastErr = err;
+      const msg = String(err?.message ?? "");
+      const conflict = /not a fast forward|fast-forward|reference already exists|422/i.test(msg);
+      if (!conflict || attempt >= maxAttempts) break;
+      // Branch hat sich verschoben -> kurz warten, aktuellen Stand holen, erneut versuchen.
+      await sleep(300 * attempt); // 300ms, 600ms, 900ms, ...
+      const base = await readBase();
+      baseSha = base.sha;
+      baseTree = base.tree;
+    }
   }
-  return commit.sha;
+  // Alle Versuche erschöpft: verständlichen Konflikt-Fehler werfen.
+  const detail = String(lastErr?.message ?? "").slice(0, 160);
+  throw new Error(t("GOS.Notify.PushConflict", { detail }));
 }
 
 /** Kompletten Datei-Baum des Branches als Map path -> blob-sha holen. */
@@ -250,65 +326,152 @@ async function githubReadBlob(sha) {
 /*  Export (beide Modi)                                                        */
 /* -------------------------------------------------------------------------- */
 
+/** Ob Assets beim Export in Sammelordner (assets/<Typ>/…) abgelegt werden. */
+function exportFlattenAssets() {
+  return game.settings.get(MODULE_ID, "exportFlattenAssets") === true;
+}
+
+/** Ordner-Pfad eines Dokuments in der Foundry-Oberfläche (Wurzel -> Blatt). */
+function folderPathOf(doc) {
+  const names = [];
+  let f = doc?.folder ?? null;
+  while (f) {
+    names.unshift(f.name);
+    f = f.folder ?? null;
+  }
+  return names;
+}
+
+/**
+ * Schreibt die Asset-Referenzen in `data` auf ihren repo-relativen Zielpfad um
+ * und liefert die Zuordnung `dest -> src` für die Speicherung. Mutiert `data`.
+ *
+ * - `flatten` = true  -> alle Assets nach `<Typ>/<Dateiname>` (Sammelordner).
+ * - `flatten` = false -> Originalpfade beibehalten (Referenzen unverändert).
+ */
+function remapExportAssets(data, flatten, docType) {
+  const map = new Map(); // dest (Repo-Pfad) -> src (Original-Pfad zum Abrufen)
+  const remap = (s) => {
+    const trimmed = String(s).trim();
+    if (trimmed && ASSET_EXT.test(trimmed) && !ASSET_SKIP.test(trimmed)) {
+      const clean = trimmed.split("?")[0].replace(/^\/+/, "");
+      const dest = flatten ? `${docType}/${basename(clean)}` : clean;
+      if (!map.has(dest)) map.set(dest, clean);
+      return flatten ? dest : null; // ohne Flatten die Referenz unverändert lassen
+    }
+    return null;
+  };
+  const visit = (v) => {
+    if (Array.isArray(v)) {
+      for (let i = 0; i < v.length; i++) {
+        if (typeof v[i] === "string") {
+          const nv = remap(v[i]);
+          if (nv !== null) v[i] = nv;
+        } else visit(v[i]);
+      }
+    } else if (v && typeof v === "object") {
+      for (const k of Object.keys(v)) {
+        if (typeof v[k] === "string") {
+          const nv = remap(v[k]);
+          if (nv !== null) v[k] = nv;
+        } else visit(v[k]);
+      }
+    }
+  };
+  visit(data);
+  return map;
+}
+
 /** Ein einzelnes Dokument exportieren (Komfort-Wrapper). */
-async function exportDocument(doc) {
-  return exportDocuments([doc]);
+async function exportDocument(doc, opts = {}) {
+  return exportDocuments([doc], opts);
 }
 
 /**
  * Mehrere Dokumente exportieren. Sammelt JSON + referenzierte Assets und
  * überträgt sie je nach Modus in den Git-Ordner (server) oder direkt zu
  * GitHub (github). Gibt { count, assets } zurück.
+ *
+ * `opts.flattenAssets` überschreibt die globale Einstellung für diesen Export.
  */
-async function exportDocuments(docs) {
+async function exportDocuments(docs, opts = {}) {
   const withAssets = syncAssets();
+  const flatten = opts.flattenAssets ?? exportFlattenAssets();
   const jsonWrites = [];
-  const assetPaths = new Set();
+  const assetMap = new Map(); // Repo-Pfad (dest) -> Original-Pfad (src)
 
   for (const doc of docs) {
     const cfg = TYPE_CONFIG[doc.documentName];
     if (!cfg) continue;
     const data = doc.toObject(); // vollständige Quelldaten inkl. _id
+    // Ordner-Pfad der Oberfläche mitspeichern, damit der Import ihn wiederherstellen kann.
+    foundry.utils.setProperty(data, `flags.${MODULE_ID}.folderPath`, folderPathOf(doc));
+    if (withAssets) {
+      const map = remapExportAssets(data, flatten, doc.documentName);
+      for (const [dest, src] of map) if (!assetMap.has(dest)) assetMap.set(dest, src);
+    }
     const json = JSON.stringify(data, null, 2);
     const fileName = `${sanitize(doc.name)}__${doc.id}.json`;
     jsonWrites.push({ folder: cfg.folder, fileName, json });
-    if (withAssets) for (const a of collectAssetPaths(data)) assetPaths.add(a);
   }
 
   if (syncMode() === "github") {
-    const files = [];
-    for (const w of jsonWrites) files.push({ path: `${w.folder}/${w.fileName}`, text: w.json });
-    let assets = 0;
-    for (const a of assetPaths) {
-      try {
-        files.push({ path: `assets/${a}`, bytes: await fetchBytes(dataUrl(a)) });
-        assets++;
-      } catch (err) {
-        console.warn(`${MODULE_ID} | Asset übersprungen: ${a}`, err);
+    const progress = makeProgress(t("GOS.Progress.Exporting"));
+    try {
+      const files = [];
+      for (const w of jsonWrites) files.push({ path: `${w.folder}/${w.fileName}`, text: w.json });
+      let assets = 0;
+      const assetList = [...assetMap.entries()]; // [dest, src]
+      for (let i = 0; i < assetList.length; i++) {
+        const [dest, src] = assetList[i];
+        progress.update((i / (assetList.length + 1)) * 0.5, t("GOS.Progress.Asset", { name: basename(dest) }));
+        try {
+          files.push({ path: `assets/${dest}`, bytes: await fetchBytes(dataUrl(src)) });
+          assets++;
+        } catch (err) {
+          console.warn(`${MODULE_ID} | Asset übersprungen: ${src}`, err);
+        }
       }
+      await githubPushFiles(
+        files,
+        `Git Object Sync: ${jsonWrites.length} Objekt(e), ${assets} Asset(s)`,
+        (done, total) =>
+          progress.update(0.5 + (done / total) * 0.5, t("GOS.Progress.Uploading", { done, total }))
+      );
+      progress.done(t("GOS.Progress.Done"));
+      return { count: jsonWrites.length, assets };
+    } finally {
+      // Ladeleiste immer ausblenden – auch wenn githubPushFiles abbricht.
+      progress.done("");
     }
-    await githubPushFiles(files, `Git Object Sync: ${jsonWrites.length} Objekt(e), ${assets} Asset(s)`);
-    return { count: jsonWrites.length, assets };
   }
 
   // Server-Modus: in den Git-Ordner schreiben.
+  const progress = makeProgress(t("GOS.Progress.Exporting"));
+  const totalSteps = jsonWrites.length + assetMap.size;
+  let step = 0;
   for (const w of jsonWrites) {
+    progress.update(step / totalSteps, t("GOS.Progress.Object", { name: w.fileName }));
     const dir = `${exportRoot()}/${w.folder}`;
     await ensureDir(dir);
     await uploadText(dir, w.fileName, w.json);
+    step++;
   }
   let assets = 0;
-  for (const a of assetPaths) {
+  for (const [dest, src] of assetMap) {
+    progress.update(step / totalSteps, t("GOS.Progress.Asset", { name: basename(dest) }));
     try {
-      const bytes = await fetchBytes(dataUrl(a));
-      const dir = `${exportRoot()}/assets/${dirname(a)}`.replace(/\/+$/, "");
+      const bytes = await fetchBytes(dataUrl(src));
+      const dir = `${exportRoot()}/assets/${dirname(dest)}`.replace(/\/+$/, "");
       await ensureDir(dir);
-      await uploadBytes(dir, basename(a), bytes);
+      await uploadBytes(dir, basename(dest), bytes);
       assets++;
     } catch (err) {
-      console.warn(`${MODULE_ID} | Asset übersprungen: ${a}`, err);
+      console.warn(`${MODULE_ID} | Asset übersprungen: ${src}`, err);
     }
+    step++;
   }
+  progress.done(t("GOS.Progress.Done"));
   return { count: jsonWrites.length, assets };
 }
 
@@ -342,30 +505,136 @@ async function listExportedFiles(type) {
   }
 }
 
-/** Referenzierte Assets aus dem Git-Ordner an ihren Originalort zurückschreiben. */
-async function restoreAssetsServer(data) {
+/** Rohdaten eines Import-Eintrags laden (für Vorschau/Import). */
+async function readEntryData(value, tree = null) {
+  if (syncMode() === "github") {
+    const sha = (tree ?? (await githubTree())).get(value);
+    if (!sha) return null;
+    return JSON.parse(new TextDecoder().decode(await githubReadBlob(sha)));
+  }
+  const res = await fetch(`${value}?t=${Date.now()}`);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+/** Konfigurierter Ziel-Unterordner für importierte Assets (leer = Originalpfad). */
+function importAssetPrefix() {
+  return (game.settings.get(MODULE_ID, "importAssetPrefix") || "")
+    .trim()
+    .replace(/^\/+|\/+$/g, "");
+}
+
+/** Zielpfad eines Assets beim Import (mit optionalem Präfix). */
+function importAssetTarget(a, prefix) {
+  return prefix ? `${prefix}/${a}` : a;
+}
+
+/** Globaler Import-Ordner-Modus: original | none | custom. */
+function importFolderMode() {
+  return game.settings.get(MODULE_ID, "importFolderMode") || "original";
+}
+
+/** Name des festen Import-Ordners (nur im Modus "custom"). */
+function importFolderName() {
+  return (game.settings.get(MODULE_ID, "importFolderName") || "").trim();
+}
+
+/** Ordner-Hierarchie (nach Namen) in der Seitenleiste anlegen; Blatt-ID zurückgeben. */
+async function ensureFolderPath(type, names) {
+  let parentId = null;
+  for (const name of names) {
+    if (!name) continue;
+    let folder = game.folders.find(
+      (f) => f.type === type && f.name === name && (f.folder?.id ?? null) === parentId
+    );
+    if (!folder) folder = await Folder.create({ name, type, folder: parentId });
+    parentId = folder.id;
+  }
+  return parentId;
+}
+
+/**
+ * Ziel-Ordner (Seitenleiste) für ein importiertes Dokument bestimmen und in
+ * `data.folder` setzen. Entfernt so auch die weltfremde Original-Ordner-ID. Modi:
+ *  - original: gleiche Ordner-Struktur wie beim Export (per Namen neu anlegen)
+ *  - none:     kein Ordner (Wurzel)
+ *  - custom:   fester Ordner mit konfiguriertem Namen
+ */
+async function resolveImportFolder(type, data, mode, customName) {
+  if (mode === "none") {
+    data.folder = null;
+    return;
+  }
+  if (mode === "custom") {
+    const name = (customName || "").trim();
+    data.folder = name ? await ensureFolderPath(type, [name]) : null;
+    return;
+  }
+  // original
+  const path = foundry.utils.getProperty(data, `flags.${MODULE_ID}.folderPath`) || [];
+  data.folder = Array.isArray(path) && path.length ? await ensureFolderPath(type, path) : null;
+}
+
+/**
+ * Schreibt die Asset-Pfade im Datenobjekt so um, dass sie auf den Import-Zielort
+ * (mit Präfix) zeigen. Mutiert `data` direkt. Ohne Präfix passiert nichts.
+ */
+function rewriteAssetPaths(data, prefix) {
+  if (!prefix) return;
+  const remap = (s) => {
+    const trimmed = String(s).trim();
+    if (trimmed && ASSET_EXT.test(trimmed) && !ASSET_SKIP.test(trimmed)) {
+      const clean = trimmed.split("?")[0].replace(/^\/+/, "");
+      return `${prefix}/${clean}`;
+    }
+    return null;
+  };
+  const visit = (v) => {
+    if (Array.isArray(v)) {
+      for (let i = 0; i < v.length; i++) {
+        if (typeof v[i] === "string") {
+          const nv = remap(v[i]);
+          if (nv !== null) v[i] = nv;
+        } else visit(v[i]);
+      }
+    } else if (v && typeof v === "object") {
+      for (const k of Object.keys(v)) {
+        if (typeof v[k] === "string") {
+          const nv = remap(v[k]);
+          if (nv !== null) v[k] = nv;
+        } else visit(v[k]);
+      }
+    }
+  };
+  visit(data);
+}
+
+/** Referenzierte Assets aus dem Git-Ordner an ihren Zielort zurückschreiben. */
+async function restoreAssetsServer(data, prefix = "") {
   for (const a of collectAssetPaths(data)) {
     try {
       const bytes = await fetchBytes(dataUrl(`${exportRoot()}/assets/${a}`));
-      const dir = dirname(a);
+      const target = importAssetTarget(a, prefix);
+      const dir = dirname(target);
       if (dir) await ensureDir(dir);
-      await uploadBytes(dir, basename(a), bytes);
+      await uploadBytes(dir, basename(target), bytes);
     } catch (err) {
       console.warn(`${MODULE_ID} | Asset-Restore übersprungen: ${a}`, err);
     }
   }
 }
 
-/** Referenzierte Assets aus GitHub an ihren Originalort zurückschreiben. */
-async function restoreAssetsGithub(data, tree) {
+/** Referenzierte Assets aus GitHub an ihren Zielort zurückschreiben. */
+async function restoreAssetsGithub(data, tree, prefix = "") {
   for (const a of collectAssetPaths(data)) {
     try {
       const sha = tree.get(`assets/${a}`);
       if (!sha) continue;
       const bytes = await githubReadBlob(sha);
-      const dir = dirname(a);
+      const target = importAssetTarget(a, prefix);
+      const dir = dirname(target);
       if (dir) await ensureDir(dir);
-      await uploadBytes(dir, basename(a), bytes);
+      await uploadBytes(dir, basename(target), bytes);
     } catch (err) {
       console.warn(`${MODULE_ID} | Asset-Restore übersprungen: ${a}`, err);
     }
@@ -373,11 +642,16 @@ async function restoreAssetsGithub(data, tree) {
 }
 
 /** Aus geladenen Daten ein Dokument anlegen bzw. aktualisieren. */
-async function importDataDoc(type, data) {
+async function importDataDoc(type, data, folderOpts = {}) {
   const cls = getDocumentClass(type);
   const collection = TYPE_CONFIG[type].collection();
   const existing = data._id ? collection.get(data._id) : null;
   const overwrite = game.settings.get(MODULE_ID, "overwriteImport");
+
+  // Ziel-Ordner in der Seitenleiste bestimmen (und weltfremde Ordner-ID ersetzen).
+  const mode = folderOpts.folderMode ?? importFolderMode();
+  const name = folderOpts.folderName ?? importFolderName();
+  await resolveImportFolder(type, data, mode, name);
 
   if (existing) {
     if (overwrite) {
@@ -397,68 +671,427 @@ async function importDataDoc(type, data) {
 /**
  * Einen Import-Eintrag laden (inkl. Assets) und als Dokument importieren.
  * `tree` wird im GitHub-Modus einmalig übergeben, um Mehrfach-Abfragen zu sparen.
+ * `opts` überschreibt die globalen Einstellungen für diesen Import
+ * ({ assetPrefix, folderMode, folderName }).
  */
-async function importValue(type, value, tree = null) {
+async function importValue(type, value, tree = null, opts = {}) {
   const withAssets = syncAssets();
+  const prefix = opts.assetPrefix ?? importAssetPrefix();
   let data;
   if (syncMode() === "github") {
     const sha = (tree ?? (await githubTree())).get(value);
     if (!sha) throw new Error(`Nicht im Repo: ${value}`);
     data = JSON.parse(new TextDecoder().decode(await githubReadBlob(sha)));
-    if (withAssets) await restoreAssetsGithub(data, tree ?? (await githubTree()));
+    if (withAssets) await restoreAssetsGithub(data, tree ?? (await githubTree()), prefix);
   } else {
     const response = await fetch(`${value}?t=${Date.now()}`); // Cache umgehen
     if (!response.ok) throw new Error(`HTTP ${response.status} für ${value}`);
     data = await response.json();
-    if (withAssets) await restoreAssetsServer(data);
+    if (withAssets) await restoreAssetsServer(data, prefix);
   }
-  return importDataDoc(type, data);
+  // Nach dem Zurückschreiben die Referenzen auf den Zielort umbiegen.
+  rewriteAssetPaths(data, prefix);
+  return importDataDoc(type, data, { folderMode: opts.folderMode, folderName: opts.folderName });
 }
 
 /* -------------------------------------------------------------------------- */
 /*  Dialoge                                                                    */
 /* -------------------------------------------------------------------------- */
 
-function buildCheckboxList(entries) {
-  // entries: [{ value, label, sub }]
-  const rows = entries
-    .map(
-      (e) => `
-      <label class="gos-row" style="display:flex;gap:.5rem;align-items:center;padding:.15rem 0;">
-        <input type="checkbox" name="gos" value="${foundry.utils.escapeHTML(e.value)}"/>
-        <span style="flex:1;">${foundry.utils.escapeHTML(e.label)}</span>
-        ${e.sub ? `<span style="opacity:.6;font-size:.85em;">${foundry.utils.escapeHTML(e.sub)}</span>` : ""}
-      </label>`
-    )
+/** HTML-Sonderzeichen maskieren. */
+function escHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[c]);
+}
+
+/** Anzeige-Label für die Gruppierung nach (Sub-)Typ eines Dokuments. */
+function groupLabel(docType, sub) {
+  if (!sub || sub === "base") return t("GOS.Dialog.GroupOther");
+  const key = CONFIG?.[docType]?.typeLabels?.[sub];
+  if (key) {
+    const loc = game.i18n.localize(key);
+    if (loc && loc !== key) return loc;
+  }
+  return String(sub).charAt(0).toUpperCase() + String(sub).slice(1);
+}
+
+/** Options-Block für den Export-Dialog (Flatten-Checkbox). */
+function exportOptionsHtml() {
+  const flatten = exportFlattenAssets();
+  return `
+    <label class="gos-opt">
+      <input type="checkbox" class="gos-opt-flatten" ${flatten ? "checked" : ""}/>
+      <span>${t("GOS.Dialog.OptFlatten")}</span>
+    </label>`;
+}
+
+/** Ausgewählte Export-Optionen aus dem Dialog lesen. */
+function readExportOptions(root) {
+  const cb = root.querySelector(".gos-opt-flatten");
+  return { flattenAssets: cb ? cb.checked : undefined };
+}
+
+/** Options-Block für den Import-Dialog (Asset- Zielordner + Ordner-Modus). */
+function importOptionsHtml() {
+  const prefix = importAssetPrefix();
+  const mode = importFolderMode();
+  const name = importFolderName();
+  const opt = (v, label) =>
+    `<option value="${v}" ${mode === v ? "selected" : ""}>${escHtml(label)}</option>`;
+  return `
+    <label class="gos-opt gos-opt--col">
+      <span>${t("GOS.Dialog.OptAssetTarget")}</span>
+      <input type="text" class="gos-opt-assetprefix" value="${escHtml(prefix)}" placeholder="z. B. git-import"/>
+    </label>
+    <label class="gos-opt gos-opt--col">
+      <span>${t("GOS.Dialog.OptFolderMode")}</span>
+      <select class="gos-opt-foldermode">
+        ${opt("original", t("GOS.Settings.ImportFolderMode.Original"))}
+        ${opt("none", t("GOS.Settings.ImportFolderMode.None"))}
+        ${opt("custom", t("GOS.Settings.ImportFolderMode.Custom"))}
+      </select>
+    </label>
+    <label class="gos-opt gos-opt--col">
+      <span>${t("GOS.Dialog.OptFolderName")}</span>
+      <input type="text" class="gos-opt-foldername" value="${escHtml(name)}" placeholder="z. B. Git Import"/>
+    </label>`;
+}
+
+/** Ausgewählte Import-Optionen aus dem Dialog lesen. */
+function readImportOptions(root) {
+  return {
+    assetPrefix: (root.querySelector(".gos-opt-assetprefix")?.value ?? "")
+      .trim()
+      .replace(/^\/+|\/+$/g, ""),
+    folderMode: root.querySelector(".gos-opt-foldermode")?.value || undefined,
+    folderName: (root.querySelector(".gos-opt-foldername")?.value ?? "").trim()
+  };
+}
+
+function buildCheckboxList(entries, optionsHtml = "") {
+  // entries: [{ value, label, img, desc, group }]
+  const esc = escHtml;
+
+  const rowHtml = (e) => {
+    const thumb = e.img
+      ? `<img class="gos-thumb" src="${esc(e.img)}" loading="lazy" alt=""/>`
+      : `<span class="gos-thumb gos-thumb--empty"><i class="fa-solid fa-cube"></i></span>`;
+    const desc = e.desc ? `<span class="gos-desc">${esc(e.desc)}</span>` : "";
+    const search = esc(`${e.label ?? ""} ${e.desc ?? ""}`.toLowerCase());
+    return `
+      <label class="gos-row" data-search="${search}">
+        <input type="checkbox" name="gos" value="${esc(e.value)}"/>
+        ${thumb}
+        <span class="gos-text">
+          <span class="gos-name">${esc(e.label)}</span>
+          ${desc}
+        </span>
+      </label>`;
+  };
+
+  // Einträge nach Gruppe bündeln (Reihenfolge alphabetisch, "Sonstige" ans Ende).
+  const otherLabel = t("GOS.Dialog.GroupOther");
+  const groups = new Map();
+  for (const e of entries) {
+    const g = e.group || otherLabel;
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(e);
+  }
+  const groupNames = [...groups.keys()].sort((a, b) => {
+    if (a === otherLabel) return 1;
+    if (b === otherLabel) return -1;
+    return a.localeCompare(b);
+  });
+  const multi = groupNames.length > 1;
+
+  const sections = groupNames
+    .map((name) => {
+      const rows = groups.get(name).map(rowHtml).join("");
+      if (!multi) return `<div class="gos-list">${rows}</div>`;
+      return `
+        <details class="gos-group">
+          <summary class="gos-group-head">
+            <span class="gos-group-name">${esc(name)}</span>
+            <span class="gos-group-count">${groups.get(name).length}</span>
+          </summary>
+          <div class="gos-list">${rows}</div>
+        </details>`;
+    })
     .join("");
 
+  // Layout-Regeln direkt einbetten, damit sie unabhängig von der externen
+  // CSS-Datei und System-Styles zuverlässig greifen (kleine Thumbnails,
+  // eine Zeile pro Eintrag, scrollbare Liste).
+  const style = `
+    <style>
+      .git-object-sync-dialog .window-content { padding: 8px 10px; }
+      .gos-dialog { color: #e8e8ea; }
+      .gos-dialog * { box-sizing: border-box; }
+      .gos-dialog .gos-search {
+        display: flex; align-items: center; gap: 6px;
+        padding: 5px 8px; margin: 0 0 6px;
+        background: #15151b; border: 1px solid #2a2a33; border-left: 3px solid #00e5ff;
+      }
+      .gos-dialog .gos-search i { color: #00e5ff; }
+      .gos-dialog .gos-search input {
+        flex: 1; background: transparent; border: none; outline: none; color: #e8e8ea;
+      }
+      .gos-dialog .gos-selectall {
+        display: flex; align-items: center; gap: 8px;
+        padding: 6px 4px; margin: 0 0 6px;
+        background: #0d0d10; color: #e6001f;
+        text-transform: uppercase; letter-spacing: 1.5px;
+        font-size: 0.8em; font-weight: 700;
+        border-bottom: 1px solid #8a0014; cursor: pointer;
+      }
+      .gos-dialog .gos-scroll {
+        max-height: 50vh; overflow-y: auto; padding-right: 4px;
+      }
+      .gos-dialog .gos-list { display: flex; flex-direction: column; gap: 4px; }
+      .gos-dialog .gos-group {
+        border: 1px solid #2a2a33; border-left: 3px solid #00e5ff;
+        background: #101014; margin: 0 0 4px;
+      }
+      .gos-dialog .gos-group > summary {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 6px 8px; cursor: pointer; list-style: none;
+        color: #00e5ff; text-transform: uppercase; letter-spacing: 1px;
+        font-size: 0.8em; font-weight: 700;
+      }
+      .gos-dialog .gos-group > summary::-webkit-details-marker { display: none; }
+      .gos-dialog .gos-group[open] > summary { border-bottom: 1px solid #2a2a33; }
+      .gos-dialog .gos-group-count {
+        background: #8a0014; color: #fff; border-radius: 10px;
+        padding: 0 8px; font-size: 0.9em;
+      }
+      .gos-dialog .gos-group .gos-list { padding: 4px; }
+      .gos-dialog .gos-row {
+        display: flex; align-items: center; gap: 10px;
+        padding: 6px 8px; margin: 0;
+        background: #15151b; border: 1px solid #2a2a33;
+        border-left: 3px solid #8a0014; cursor: pointer;
+      }
+      .gos-dialog .gos-row:hover { background: #1d1d26; border-left-color: #00e5ff; }
+      .gos-dialog .gos-row input[type="checkbox"] {
+        flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: #e6001f;
+      }
+      .gos-dialog .gos-hidden { display: none !important; }
+      .gos-dialog .gos-empty {
+        padding: 10px; text-align: center; color: #9a9aa2; font-style: italic;
+      }
+      .gos-dialog .gos-thumb {
+        flex: 0 0 auto;
+        width: 44px !important; height: 44px !important;
+        min-width: 44px; max-width: 44px;
+        object-fit: cover; background: #000;
+        border: 1px solid #2a2a33; border-radius: 2px;
+      }
+      .gos-dialog .gos-thumb--empty {
+        display: inline-flex; align-items: center; justify-content: center;
+        color: #4a4a55; font-size: 18px;
+      }
+      .gos-dialog .gos-text {
+        display: flex; flex-direction: column; min-width: 0; flex: 1; overflow: hidden;
+      }
+      .gos-dialog .gos-name {
+        font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .gos-dialog .gos-desc {
+        font-size: 0.8em; color: #9a9aa2;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .gos-dialog .gos-options {
+        display: flex; flex-direction: column; gap: 8px;
+        padding: 8px; margin: 0 0 8px;
+        background: #101018; border: 1px solid #2a2a33; border-left: 3px solid #00e5ff;
+      }
+      .gos-dialog .gos-opt { display: flex; align-items: center; gap: 8px; margin: 0; cursor: pointer; }
+      .gos-dialog .gos-opt--col { flex-direction: column; align-items: stretch; gap: 3px; cursor: default; }
+      .gos-dialog .gos-opt--col > span { font-size: 0.8em; color: #9a9aa2; }
+      .gos-dialog .gos-opt input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: #e6001f; }
+      .gos-dialog .gos-opt input[type="text"], .gos-dialog .gos-opt select {
+        background: #15151b; color: #e8e8ea; border: 1px solid #2a2a33; padding: 4px 6px;
+      }
+    </style>`;
+
+  const options = optionsHtml ? `<div class="gos-options">${optionsHtml}</div>` : "";
+
   return `
-    <form>
-      <div style="margin-bottom:.5rem;">
-        <label style="display:flex;gap:.5rem;align-items:center;font-weight:bold;">
-          <input type="checkbox" class="gos-select-all"/>
-          <span>${t("GOS.Dialog.SelectAll")}</span>
-        </label>
+    ${style}
+    <div class="gos-dialog">
+      ${options}
+      <div class="gos-search">
+        <i class="fa-solid fa-magnifying-glass"></i>
+        <input type="text" class="gos-search-input" placeholder="${t("GOS.Dialog.SearchPlaceholder")}"/>
       </div>
-      <hr/>
-      <div class="gos-list" style="max-height:50vh;overflow:auto;">${rows}</div>
-    </form>`;
+      <label class="gos-selectall">
+        <input type="checkbox" class="gos-select-all"/>
+        <span>${t("GOS.Dialog.SelectAll")}</span>
+      </label>
+      <div class="gos-scroll">
+        ${sections}
+        <div class="gos-empty gos-hidden">${t("GOS.Dialog.NoMatches")}</div>
+      </div>
+    </div>`;
+}
+
+/** Bild-URL für die Vorschau (externe URLs/Data-URLs unverändert, sonst geroutet). */
+function thumbUrl(img) {
+  if (!img) return null;
+  if (/^(https?:|data:)/i.test(img)) return img;
+  try {
+    return dataUrl(String(img).replace(/^\/+/, ""));
+  } catch {
+    return img;
+  }
+}
+
+/** Erstes sinnvolles Vorschaubild aus einem Dokument/Datenobjekt wählen. */
+function pickImg(o) {
+  return (
+    o?.img ||
+    o?.thumb ||
+    o?.background?.src ||
+    o?.prototypeToken?.texture?.src ||
+    null
+  );
+}
+
+/** Kurze, HTML-freie Beschreibung aus verbreiteten System-Feldern ableiten. */
+function docSummary(o) {
+  const raw =
+    o?.system?.description?.value ??
+    (typeof o?.system?.description === "string" ? o.system.description : null) ??
+    o?.system?.biography?.value ??
+    o?.system?.details?.biography?.value ??
+    o?.system?.details?.notes ??
+    "";
+  const text = String(raw)
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&[a-z]+;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > 140 ? `${text.slice(0, 140)}…` : text;
 }
 
 function wireSelectAll(dialogElement) {
-  const all = dialogElement.querySelector(".gos-select-all");
-  if (!all) return;
-  all.addEventListener("change", () => {
-    dialogElement
-      .querySelectorAll('input[name="gos"]')
-      .forEach((cb) => (cb.checked = all.checked));
+  const root = dialogElement?.element ?? dialogElement;
+  if (!root || typeof root.querySelector !== "function") return;
+
+  // Kaputte/fehlende Vorschaubilder durch ein Platzhalter-Icon ersetzen.
+  root.querySelectorAll("img.gos-thumb").forEach((img) => {
+    img.addEventListener("error", () => {
+      const span = document.createElement("span");
+      span.className = "gos-thumb gos-thumb--empty";
+      span.innerHTML = '<i class="fa-solid fa-cube"></i>';
+      img.replaceWith(span);
+    });
   });
+
+  const isHidden = (el) => el.closest(".gos-hidden") !== null;
+
+  const all = root.querySelector(".gos-select-all");
+  if (all) {
+    all.addEventListener("change", () => {
+      // Nur aktuell sichtbare (nicht weggefilterte) Einträge umschalten.
+      root.querySelectorAll('input[name="gos"]').forEach((cb) => {
+        if (!isHidden(cb)) cb.checked = all.checked;
+      });
+    });
+  }
+
+  // Live-Suche: Zeilen nach Name/Beschreibung filtern, leere Gruppen ausblenden.
+  const search = root.querySelector(".gos-search-input");
+  if (search) {
+    const rows = Array.from(root.querySelectorAll(".gos-row"));
+    const groups = Array.from(root.querySelectorAll(".gos-group"));
+    const empty = root.querySelector(".gos-empty");
+    const apply = () => {
+      const q = search.value.trim().toLowerCase();
+      let anyVisible = false;
+      for (const row of rows) {
+        const match = !q || (row.dataset.search || "").includes(q);
+        row.classList.toggle("gos-hidden", !match);
+        if (match) anyVisible = true;
+      }
+      for (const g of groups) {
+        const groupHasMatch = g.querySelector(".gos-row:not(.gos-hidden)") !== null;
+        g.classList.toggle("gos-hidden", !groupHasMatch);
+        if (q && groupHasMatch) g.open = true; // bei Suche passende Gruppen aufklappen
+      }
+      if (empty) empty.classList.toggle("gos-hidden", anyVisible);
+    };
+    search.addEventListener("input", apply);
+  }
 }
 
 function readSelected(dialogElement) {
+  const root = dialogElement?.element ?? dialogElement;
   return Array.from(
-    dialogElement.querySelectorAll('input[name="gos"]:checked')
+    root.querySelectorAll('input[name="gos"]:checked')
   ).map((cb) => cb.value);
+}
+
+/**
+ * Auswahl-Dialog anzeigen. Nutzt DialogV2, wenn verfügbar, und fällt sonst
+ * (oder bei einem Fehler) auf den klassischen Dialog zurück. `onConfirm`
+ * erhält das Wurzel-HTMLElement des Dialoginhalts.
+ */
+async function openSelectionDialog({ title, content, confirmLabel, confirmIcon, onConfirm }) {
+  const DV2 = foundry.applications?.api?.DialogV2;
+  if (DV2) {
+    try {
+      await DV2.wait({
+        window: { title },
+        position: { width: 520 },
+        classes: ["git-object-sync-dialog"],
+        content,
+        rejectClose: false,
+        buttons: [
+          {
+            action: "ok",
+            label: confirmLabel,
+            icon: confirmIcon,
+            default: true,
+            callback: (event, button, dialog) => onConfirm(dialog.element ?? dialog)
+          },
+          { action: "cancel", label: t("GOS.Dialog.Cancel") }
+        ],
+        render: (event, dialog) => wireSelectAll(dialog.element ?? dialog)
+      });
+      return;
+    } catch (err) {
+      console.error(`${MODULE_ID} | DialogV2 fehlgeschlagen, Fallback auf Dialog`, err);
+    }
+  }
+
+  // Fallback: klassischer Dialog (auch wenn DialogV2 nicht verfügbar ist).
+  await new Promise((resolve) => {
+    new Dialog(
+      {
+        title,
+        content,
+        default: "ok",
+        buttons: {
+          ok: {
+            icon: `<i class="${confirmIcon}"></i>`,
+            label: confirmLabel,
+            callback: (html) => onConfirm(html?.[0] ?? html)
+          },
+          cancel: { label: t("GOS.Dialog.Cancel") }
+        },
+        render: (html) => wireSelectAll(html?.[0] ?? html),
+        close: () => resolve()
+      },
+      { classes: ["git-object-sync-dialog"] }
+    ).render(true);
+  });
 }
 
 /** Export-Dialog für einen Dokumenttyp öffnen. */
@@ -467,37 +1100,38 @@ async function openExportDialog(type) {
   const label = game.i18n.localize(`DOCUMENT.${type}`) || type;
   const docs = cfg.collection().contents.sort((a, b) => a.name.localeCompare(b.name));
 
-  const entries = docs.map((d) => ({ value: d.id, label: d.name, sub: d.id }));
+  const entries = docs.map((d) => {
+    const src = d.toObject();
+    return {
+      value: d.id,
+      label: d.name,
+      img: thumbUrl(pickImg(src)),
+      desc: docSummary(src),
+      group: groupLabel(type, src.type)
+    };
+  });
   const content = docs.length
-    ? buildCheckboxList(entries)
+    ? buildCheckboxList(entries, exportOptionsHtml())
     : `<p>${t("GOS.Dialog.NothingSelected")}</p>`;
 
-  await foundry.applications.api.DialogV2.wait({
-    window: { title: t("GOS.Dialog.ExportTitle", { label }) },
-    position: { width: 480 },
+  await openSelectionDialog({
+    title: t("GOS.Dialog.ExportTitle", { label }),
     content,
-    buttons: [
-      {
-        action: "export",
-        label: t("GOS.Dialog.ExportButton"),
-        icon: "fa-solid fa-code-branch",
-        default: true,
-        callback: async (event, button, dialog) => {
-          const ids = readSelected(dialog.element);
-          if (!ids.length) return ui.notifications.warn(t("GOS.Dialog.NothingSelected"));
-          const docs = ids.map((id) => cfg.collection().get(id)).filter(Boolean);
-          try {
-            const { count, assets } = await exportDocuments(docs);
-            ui.notifications.info(t("GOS.Notify.Exported", { count, assets }));
-          } catch (err) {
-            console.error(`${MODULE_ID} | Export`, err);
-            ui.notifications.error(t("GOS.Notify.ExportError", { error: err.message }));
-          }
-        }
-      },
-      { action: "cancel", label: t("GOS.Dialog.Cancel") }
-    ],
-    render: (event, dialog) => wireSelectAll(dialog.element)
+    confirmLabel: t("GOS.Dialog.ExportButton"),
+    confirmIcon: "fa-solid fa-code-branch",
+    onConfirm: async (root) => {
+      const ids = readSelected(root);
+      if (!ids.length) return ui.notifications.warn(t("GOS.Dialog.NothingSelected"));
+      const selected = ids.map((id) => cfg.collection().get(id)).filter(Boolean);
+      const opts = readExportOptions(root);
+      try {
+        const { count, assets } = await exportDocuments(selected, opts);
+        ui.notifications.info(t("GOS.Notify.Exported", { count, assets }));
+      } catch (err) {
+        console.error(`${MODULE_ID} | Export`, err);
+        ui.notifications.error(t("GOS.Notify.ExportError", { error: err.message }));
+      }
+    }
   });
 }
 
@@ -510,41 +1144,56 @@ async function openImportDialog(type) {
     return ui.notifications.warn(t("GOS.Dialog.NothingToImport"));
   }
 
-  const entries = items.map((it) => {
-    const nice = it.base.replace(/__[A-Za-z0-9]+\.json$/i, "").replace(/\.json$/i, "");
-    return { value: it.value, label: nice || it.base, sub: it.base };
-  });
+  // Vorschaudaten (Name, Bild, Beschreibung) laden. tree wird wiederverwendet.
+  const tree = syncMode() === "github" ? await githubTree() : null;
+  const loadProgress = makeProgress(t("GOS.Progress.Loading"));
+  let loaded = 0;
+  const entries = await Promise.all(
+    items.map(async (it) => {
+      const nice = it.base.replace(/__[A-Za-z0-9]+\.json$/i, "").replace(/\.json$/i, "");
+      let data = null;
+      try {
+        data = await readEntryData(it.value, tree);
+      } catch (err) {
+        console.warn(`${MODULE_ID} | Vorschau übersprungen: ${it.value}`, err);
+      }
+      loaded++;
+      loadProgress.update(loaded / items.length);
+      return {
+        value: it.value,
+        label: data?.name || nice || it.base,
+        img: thumbUrl(pickImg(data ?? {})),
+        desc: docSummary(data ?? {}),
+        group: groupLabel(type, data?.type)
+      };
+    })
+  );
+  loadProgress.done();
 
-  await foundry.applications.api.DialogV2.wait({
-    window: { title: t("GOS.Dialog.ImportTitle", { label }) },
-    position: { width: 520 },
-    content: buildCheckboxList(entries),
-    buttons: [
-      {
-        action: "import",
-        label: t("GOS.Dialog.ImportButton"),
-        icon: "fa-solid fa-download",
-        default: true,
-        callback: async (event, button, dialog) => {
-          const values = readSelected(dialog.element);
-          if (!values.length) return ui.notifications.warn(t("GOS.Dialog.NothingSelected"));
-          let count = 0;
-          const tree = syncMode() === "github" ? await githubTree() : null;
-          for (const value of values) {
-            try {
-              await importValue(type, value, tree);
-              count++;
-            } catch (err) {
-              console.error(`${MODULE_ID} | Import`, err);
-              ui.notifications.error(t("GOS.Notify.ImportError", { error: err.message }));
-            }
-          }
-          ui.notifications.info(t("GOS.Notify.Imported", { count }));
+  await openSelectionDialog({
+    title: t("GOS.Dialog.ImportTitle", { label }),
+    content: buildCheckboxList(entries, importOptionsHtml()),
+    confirmLabel: t("GOS.Dialog.ImportButton"),
+    confirmIcon: "fa-solid fa-download",
+    onConfirm: async (root) => {
+      const values = readSelected(root);
+      if (!values.length) return ui.notifications.warn(t("GOS.Dialog.NothingSelected"));
+      const opts = readImportOptions(root);
+      let count = 0;
+      const progress = makeProgress(t("GOS.Progress.Importing"));
+      for (let i = 0; i < values.length; i++) {
+        progress.update(i / values.length);
+        try {
+          await importValue(type, values[i], tree, opts);
+          count++;
+        } catch (err) {
+          console.error(`${MODULE_ID} | Import`, err);
+          ui.notifications.error(t("GOS.Notify.ImportError", { error: err.message }));
         }
-      },
-      { action: "cancel", label: t("GOS.Dialog.Cancel") }
-    ],
-    render: (event, dialog) => wireSelectAll(dialog.element)
+      }
+      progress.done(t("GOS.Progress.Done"));
+      ui.notifications.info(t("GOS.Notify.Imported", { count }));
+    }
   });
 }
 
@@ -589,8 +1238,20 @@ function injectDirectoryButtons(type, html) {
     <button type="button" class="gos-export"><i class="fa-solid fa-code-branch"></i> ${t("GOS.Menu.Export")}</button>
     <button type="button" class="gos-import"><i class="fa-solid fa-download"></i> ${t("GOS.Menu.Import")}</button>`;
 
-  wrap.querySelector(".gos-export").addEventListener("click", () => openExportDialog(type));
-  wrap.querySelector(".gos-import").addEventListener("click", () => openImportDialog(type));
+  const surface = (fn) => () => {
+    try {
+      Promise.resolve(fn()).catch((err) => {
+        console.error(`${MODULE_ID} | Dialog`, err);
+        ui.notifications.error(t("GOS.Notify.DialogError", { error: err.message }));
+      });
+    } catch (err) {
+      console.error(`${MODULE_ID} | Dialog`, err);
+      ui.notifications.error(t("GOS.Notify.DialogError", { error: err.message }));
+    }
+  };
+
+  wrap.querySelector(".gos-export").addEventListener("click", surface(() => openExportDialog(type)));
+  wrap.querySelector(".gos-import").addEventListener("click", surface(() => openImportDialog(type)));
   header.appendChild(wrap);
 }
 
@@ -665,12 +1326,67 @@ Hooks.once("init", () => {
     type: Boolean,
     default: true
   });
+
+  game.settings.register(MODULE_ID, "exportFlattenAssets", {
+    name: t("GOS.Settings.ExportFlattenAssets.Name"),
+    hint: t("GOS.Settings.ExportFlattenAssets.Hint"),
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(MODULE_ID, "importAssetPrefix", {
+    name: t("GOS.Settings.ImportAssetPrefix.Name"),
+    hint: t("GOS.Settings.ImportAssetPrefix.Hint"),
+    scope: "world",
+    config: true,
+    type: String,
+    default: ""
+  });
+
+  game.settings.register(MODULE_ID, "importFolderMode", {
+    name: t("GOS.Settings.ImportFolderMode.Name"),
+    hint: t("GOS.Settings.ImportFolderMode.Hint"),
+    scope: "world",
+    config: true,
+    type: String,
+    choices: {
+      original: t("GOS.Settings.ImportFolderMode.Original"),
+      none: t("GOS.Settings.ImportFolderMode.None"),
+      custom: t("GOS.Settings.ImportFolderMode.Custom")
+    },
+    default: "original"
+  });
+
+  game.settings.register(MODULE_ID, "importFolderName", {
+    name: t("GOS.Settings.ImportFolderName.Name"),
+    hint: t("GOS.Settings.ImportFolderName.Hint"),
+    scope: "world",
+    config: true,
+    type: String,
+    default: ""
+  });
 });
 
-Hooks.once("ready", () => {
+// Kontextmenü- und Render-Hooks bereits im "setup" registrieren – also bevor
+// die Seitenleisten-Verzeichnisse zum ersten Mal gerendert werden. Würden sie
+// erst im "ready" registriert, fehlte der Kontextmenü-Eintrag bei Verzeichnissen,
+// die schon gerendert wurden (z. B. der standardmäßig offene Actors-Tab).
+Hooks.once("setup", () => {
   for (const [type, cfg] of Object.entries(TYPE_CONFIG)) {
     Hooks.on(cfg.contextHook, (html, entryOptions) => addContextMenuEntry(type, entryOptions));
     Hooks.on(cfg.renderHook, (app, html) => injectDirectoryButtons(type, html));
+  }
+});
+
+Hooks.once("ready", () => {
+  // Bereits gerenderte Verzeichnisse nachrüsten: Die Seitenleisten-Tabs werden
+  // vor diesem "ready"-Hook einmalig dargestellt, wodurch der renderHook für sie
+  // nicht mehr feuert. Ohne dies fehlten die Buttons auf den offenen Tabs.
+  for (const [type, cfg] of Object.entries(TYPE_CONFIG)) {
+    const app = ui[cfg.uiKey];
+    if (app?.element) injectDirectoryButtons(type, app.element);
   }
 
   // Öffentliche API, z. B. für eigene Makros.

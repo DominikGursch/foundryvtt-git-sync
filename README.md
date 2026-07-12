@@ -87,27 +87,53 @@ server/                     <- Die Server-Skripte (kommen z. B. nach /opt/git-ob
 
 ## 1. Modul installieren
 
-In diesem Schritt bringst du das Modul in deine Foundry-Installation.
+In diesem Schritt bringst du das Modul in deine Foundry-Installation. Da dein
+Modul-Repo **privat** ist, ist die **manuelle Installation (Methode 1)** der richtige
+Weg. Die bequeme Manifest-Installation (Methode 2) funktioniert nur mit einem
+**öffentlichen** Repo.
 
-**a) Modul-Ordner kopieren:** Kopiere den Ordner `git-object-sync/` in das
-`modules`-Verzeichnis deiner Foundry-Installation, sodass es am Ende so aussieht:
+### Methode 1 – Manuell (Ordner kopieren, für privates Repo)
 
-```
-<foundrydata>/Data/modules/git-object-sync/
-```
+1. Öffne das Projekt auf GitHub (angemeldet):
+   `https://github.com/DominikGursch/foundryvtt-git-sync`
+2. Klicke auf den grünen Button **„Code" → „Download ZIP"** und entpacke die
+   heruntergeladene Datei.
+3. Im entpackten Ordner findest du den Unterordner **`git-object-sync/`**. Kopiere
+   **genau diesen Ordner** in das `modules`-Verzeichnis deiner Foundry-Installation,
+   sodass es am Ende so aussieht:
+   ```
+   <foundrydata>/Data/modules/git-object-sync/
+   ```
 
 `<foundrydata>` ist dein Foundry-Data-Ordner. Wo der liegt, siehst du in Foundry
 auf der Startseite unter **Configuration** → „User Data Path".
 
-**b) Modul aktivieren:** Starte deine Welt in Foundry und gehe zu
-**Game Settings → Manage Modules**. Setze bei **„Git Object Sync"** das Häkchen
-und speichere.
+> **Update später:** Zum Aktualisieren einfach den ZIP-Download wiederholen und den
+> Ordner `git-object-sync/` erneut in `Data/modules/` kopieren (vorhandenen ersetzen).
 
-**c) Einstellungen öffnen:** Unter **Settings → Module Settings → „Git Object Sync"**
-findest du alle Optionen. Die wichtigste ist der **Sync-Modus**:
+### Methode 2 – Über die Foundry-Oberfläche (Manifest-URL, nur bei öffentlichem Repo)
 
-- **Server (Git-Ordner)** – für Variante B (Standard)
-- **GitHub (direkt, UI-only)** – für Variante A
+> **Nur möglich, wenn das Modul-Repo öffentlich ist.** Foundry lädt die Manifest-URL
+> **ohne Anmeldung**; bei einem privaten Repo schlägt der Download fehl. Solange dein
+> Repo privat bleibt, nutze **Methode 1**.
+
+1. Starte Foundry und bleibe auf dem **Setup-/Startbildschirm** (nicht in einer Welt).
+2. Wechsle zum Reiter **„Add-on Modules"** (Add-on-Module).
+3. Klicke unten auf **„Install Module"** (Modul installieren).
+4. Trage unten im Feld **„Manifest URL"** diese Adresse ein und klicke **„Install"**:
+   ```
+   https://github.com/DominikGursch/foundryvtt-git-sync/releases/latest/download/module.json
+   ```
+
+### Modul aktivieren und einstellen (beide Methoden)
+
+1. **Aktivieren:** Starte deine Welt in Foundry und gehe zu
+   **Game Settings → Manage Modules**. Setze bei **„Git Object Sync"** das Häkchen
+   und speichere.
+2. **Einstellungen öffnen:** Unter **Settings → Module Settings → „Git Object Sync"**
+   findest du alle Optionen. Die wichtigste ist der **Sync-Modus**:
+   - **Server (Git-Ordner)** – für Variante B (Standard)
+   - **GitHub (direkt, UI-only)** – für Variante A
 
 Lass **„Assets mitsichern"** aktiviert, damit Bilder/Maps vollständig mitgesichert
 werden. Welche weiteren Felder du ausfüllst, hängt von deiner Variante ab (siehe unten).
@@ -160,6 +186,41 @@ und 3 (Server) brauchst du für Variante A **nicht**.
 > **nur** auf „Contents" beschränkt ist – niemals dein Konto-Passwort. Setze bei
 > Bedarf ein Ablaufdatum. Möchtest du, dass Foundry gar nichts überschreiben kann,
 > nutze stattdessen Variante B mit einem Nur-Lese-Deploy-Key.
+
+### Asset- und Ordner-Pfade steuern (optional)
+
+Standardmäßig werden Assets **genau unter ihrem Original-Pfad** abgelegt – im Repo
+unter `assets/<Original-Pfad>` und beim Import wieder am selben Ort. Objekte landen
+beim Import in demselben Seitenleisten-Ordner wie beim Export. Über einige
+Einstellungen kannst du das anpassen. Alle stehen als **globales Modul-Setting** und
+zusätzlich **direkt im Export-/Import-Dialog** zur Verfügung (die Dialog-Werte
+überschreiben die globale Vorgabe für diesen einen Vorgang).
+
+**Export:**
+
+- **Assets in Sammelordner ablegen** (`store assets in collective folders`) — ein
+  Haken. Ist er gesetzt, werden alle Assets ordentlich nach `assets/<Typ>/<Dateiname>`
+  gelegt (z. B. `assets/Item/schwert.webp`, `assets/Actor/portrait.webp`) und die
+  Referenzen in den Objekten passend umgeschrieben. Ist der Haken **nicht** gesetzt,
+  bleiben die vollständigen Originalpfade erhalten.
+
+**Import:**
+
+- **Import-Zielordner für Assets** (`Import target folder for assets`) — der Pfad im
+  Data-Verzeichnis, unter dem importierte Bilder/Maps auf dem Server gespeichert
+  werden. Beispiel: `git-import` schreibt die Assets nach `git-import/…` und biegt
+  die Pfade in den importierten Objekten automatisch dorthin um. Leer = Originalpfad.
+- **Ordner-Verhalten** (`folder behaviour`) — steuert, in welchen Seitenleisten-Ordner
+  importierte Objekte gelegt werden:
+  - **Gleicher Ordner wie beim Export** — die Ordner-Struktur (z. B. `Weapons`) wird
+    bei Bedarf neu angelegt und das Objekt dort einsortiert.
+  - **Kein Ordner (Wurzel)** — das Objekt landet ohne Ordner ganz oben.
+  - **Fester Ordner** — alle importierten Objekte kommen in einen selbst benannten
+    Ordner (Feld **fester Ordnername**, z. B. `Git Import`).
+
+Damit „Gleicher Ordner wie beim Export" funktioniert, wird der Ordner-Pfad beim
+Export automatisch mitgespeichert – ältere Exporte (ohne diese Info) landen bei
+diesem Modus in der Wurzel.
 
 ---
 

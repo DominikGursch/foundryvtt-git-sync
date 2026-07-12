@@ -1,0 +1,177 @@
+/* -------------------------------------------------------------------------- */
+/*  Git Object Sync – Cyberpunk-RED-angelehntes Dialog- und Button-Design      */
+/* -------------------------------------------------------------------------- */
+
+.gos-dialog {
+  --gos-bg: #0d0d10;
+  --gos-panel: #15151b;
+  --gos-panel-hi: #1d1d26;
+  --gos-line: #2a2a33;
+  --gos-red: #e6001f;
+  --gos-red-dim: #8a0014;
+  --gos-cyan: #00e5ff;
+  --gos-text: #e8e8ea;
+  --gos-muted: #9a9aa2;
+
+  background: var(--gos-bg);
+  color: var(--gos-text);
+  padding: 10px 12px 12px;
+  font-family: "Roboto Condensed", "Signika", sans-serif;
+}
+
+/* "Alle auswählen"-Kopf */
+.gos-dialog .gos-selectall {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  color: var(--gos-red);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  font-size: 0.82em;
+  font-weight: 700;
+  border-bottom: 1px solid var(--gos-red-dim);
+  cursor: pointer;
+}
+
+.gos-dialog .gos-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 55vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Einzelzeile eines Objekts */
+.gos-dialog .gos-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: var(--gos-panel);
+  border: 1px solid var(--gos-line);
+  border-left: 3px solid var(--gos-red-dim);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+}
+
+.gos-dialog .gos-row:hover {
+  background: var(--gos-panel-hi);
+  border-left-color: var(--gos-cyan);
+  transform: translateX(2px);
+}
+
+.gos-dialog .gos-row input[type="checkbox"],
+.gos-dialog .gos-selectall input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--gos-red);
+  cursor: pointer;
+}
+
+.gos-dialog .gos-thumb {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  object-fit: cover;
+  background: #000;
+  border: 1px solid var(--gos-line);
+  border-radius: 2px;
+}
+
+.gos-dialog .gos-thumb--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #4a4a55;
+  font-size: 18px;
+}
+
+.gos-dialog .gos-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.gos-dialog .gos-name {
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gos-dialog .gos-desc {
+  font-size: 0.8em;
+  color: var(--gos-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Scrollbar */
+.gos-dialog .gos-list::-webkit-scrollbar {
+  width: 8px;
+}
+.gos-dialog .gos-list::-webkit-scrollbar-thumb {
+  background: var(--gos-red-dim);
+  border-radius: 4px;
+}
+.gos-dialog .gos-list::-webkit-scrollbar-track {
+  background: #000;
+}
+
+/* Dialogfenster-Rahmen im Cyberpunk-Stil (DialogV2 + klassischer Dialog) */
+.git-object-sync-dialog .window-content {
+  background: #0d0d10;
+  padding: 0;
+}
+.git-object-sync-dialog .dialog-buttons,
+.git-object-sync-dialog .form-footer {
+  background: #0d0d10;
+  padding: 8px 12px 10px;
+  gap: 8px;
+}
+.git-object-sync-dialog button {
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 600;
+}
+
+/* Buttons oben in der Seitenleiste */
+.gos-buttons {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0;
+}
+.gos-buttons button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 0.8em;
+  font-weight: 600;
+  color: #f2f2f4;
+  background: linear-gradient(180deg, #1d1d26 0%, #121218 100%);
+  border: 1px solid #2a2a33;
+  border-left: 3px solid #8a0014;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+.gos-buttons button:hover {
+  color: #00e5ff;
+  border-left-color: #00e5ff;
+  box-shadow: none;
+}
+.gos-buttons button.gos-export {
+  border-left-color: #e6001f;
+}
+.gos-buttons button.gos-export:hover {
+  border-left-color: #00e5ff;
+}
