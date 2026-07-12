@@ -1,0 +1,14 @@
+[Unit]
+Description=Git Object Sync – periodischer Pull der Foundry-Exporte (Import-Server)
+
+[Timer]
+# Erster Lauf 2 Minuten nach dem Boot ...
+OnBootSec=2min
+# ... danach alle 5 Minuten. Anpassen nach Wunsch (z. B. 10min, 15min).
+OnUnitActiveSec=5min
+# Verpasste Läufe (z. B. Server war aus) nachholen.
+Persistent=true
+Unit=git-object-sync-pull.service
+
+[Install]
+WantedBy=timers.target

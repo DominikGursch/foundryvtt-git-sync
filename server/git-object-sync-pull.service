@@ -1,0 +1,13 @@
+[Unit]
+Description=Git Object Sync – pull Foundry exports (Nur-Lese-/Import-Server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Passe User/Group und den Pfad zum Repo (letztes Argument) an deine Umgebung an.
+User=foundry
+Group=foundry
+ExecStart=/opt/git-object-sync/git-pull.sh /home/foundry/foundrydata/Data/git-export
+# Falls dein Remote per SSH-Key läuft, ggf. HOME setzen, damit ~/.ssh gefunden wird:
+Environment=HOME=/home/foundry
