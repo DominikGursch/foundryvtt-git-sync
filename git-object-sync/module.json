@@ -1,0 +1,32 @@
+{
+  "id": "git-object-sync",
+  "title": "Git Object Sync",
+  "description": "Export und Import einzelner Dokumente (Actors, Items, Szenen, Journal) als JSON-Dateien in einen Ordner, der als Git-Repository versioniert wird. Auswahl per Rechtsklick oder Checkbox-Dialog.",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": "12",
+    "verified": "12",
+    "maximum": "12"
+  },
+  "authors": [
+    {
+      "name": "Git Object Sync"
+    }
+  ],
+  "esmodules": [
+    "scripts/main.js"
+  ],
+  "languages": [
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "lang/en.json"
+    },
+    {
+      "lang": "de",
+      "name": "Deutsch",
+      "path": "lang/de.json"
+    }
+  ],
+  "flags": {}
+}

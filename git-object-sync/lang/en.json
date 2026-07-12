@@ -1,0 +1,21 @@
+{
+  "GOS.Menu.Export": "Git Export …",
+  "GOS.Menu.Import": "Git Import …",
+  "GOS.Context.Export": "Export to Git",
+  "GOS.Dialog.ExportTitle": "Git Export – {label}",
+  "GOS.Dialog.ImportTitle": "Git Import – {label}",
+  "GOS.Dialog.ExportButton": "Export selected",
+  "GOS.Dialog.ImportButton": "Import selected",
+  "GOS.Dialog.Cancel": "Cancel",
+  "GOS.Dialog.SelectAll": "Select all",
+  "GOS.Dialog.NothingToImport": "No files were found in the Git folder for this type.",
+  "GOS.Dialog.NothingSelected": "Nothing was selected.",
+  "GOS.Notify.Exported": "Exported {count} object(s) to Git.",
+  "GOS.Notify.Imported": "Imported {count} object(s) from Git.",
+  "GOS.Notify.ExportError": "Export failed: {error}",
+  "GOS.Notify.ImportError": "Import failed: {error}",
+  "GOS.Settings.ExportPath.Name": "Git export folder",
+  "GOS.Settings.ExportPath.Hint": "Path inside the Foundry Data directory where JSON files are written. This folder should be a Git repository on the server.",
+  "GOS.Settings.OverwriteImport.Name": "Overwrite on import",
+  "GOS.Settings.OverwriteImport.Hint": "When an object with the same ID already exists, update it on import instead of creating a duplicate."
+}
