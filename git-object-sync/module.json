@@ -10,9 +10,11 @@
   },
   "authors": [
     {
-      "name": "Git Object Sync"
+      "name": "Dominik Gursch"
     }
   ],
+  "license": "MIT",
+  "url": "https://github.com/DominikGursch/foundryvtt-git-sync",
   "esmodules": [
     "scripts/main.js"
   ],
