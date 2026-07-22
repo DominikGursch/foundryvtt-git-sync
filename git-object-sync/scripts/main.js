@@ -145,6 +145,22 @@ function dataUrl(path) {
   return foundry.utils.getRoute(encoded);
 }
 
+/** MIME-Typ grob aus der Dateiendung ableiten (für data:-URI-Vorschauen). */
+function guessMime(path) {
+  const ext = String(path).split(".").pop().toLowerCase();
+  return (
+    {
+      webp: "image/webp",
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      gif: "image/gif",
+      bmp: "image/bmp",
+      svg: "image/svg+xml"
+    }[ext] || "image/png"
+  );
+}
+
 function bytesToBase64(bytes) {
   let binary = "";
   const chunk = 0x8000;
@@ -774,13 +790,16 @@ function readImportOptions(root) {
 }
 
 function buildCheckboxList(entries, optionsHtml = "") {
-  // entries: [{ value, label, img, desc, group }]
+  // entries: [{ value, label, img, desc, group, fallbackUrl, ghSha, mime }]
   const esc = escHtml;
 
   const rowHtml = (e) => {
+    const fallbackAttrs =
+      (e.fallbackUrl ? ` data-fallback-url="${esc(e.fallbackUrl)}"` : "") +
+      (e.ghSha ? ` data-gh-sha="${esc(e.ghSha)}" data-mime="${esc(e.mime || "image/png")}"` : "");
     const thumb = e.img
-      ? `<img class="gos-thumb" src="${esc(e.img)}" loading="lazy" alt=""/>`
-      : `<span class="gos-thumb gos-thumb--empty"><i class="fa-solid fa-cube"></i></span>`;
+      ? `<img class="gos-thumb" src="${esc(e.img)}" loading="lazy" alt="" style="width:40px;height:40px;"${fallbackAttrs}/>`
+      : `<span class="gos-thumb gos-thumb--empty" style="width:40px;height:40px;"><i class="fa-solid fa-cube"></i></span>`;
     const desc = e.desc ? `<span class="gos-desc">${esc(e.desc)}</span>` : "";
     const search = esc(`${e.label ?? ""} ${e.desc ?? ""}`.toLowerCase());
     return `
@@ -816,6 +835,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
       return `
         <details class="gos-group">
           <summary class="gos-group-head">
+            <i class="fa-solid fa-chevron-right gos-group-chevron"></i>
             <span class="gos-group-name">${esc(name)}</span>
             <span class="gos-group-count">${groups.get(name).length}</span>
           </summary>
@@ -824,115 +844,153 @@ function buildCheckboxList(entries, optionsHtml = "") {
     })
     .join("");
 
-  // Layout-Regeln direkt einbetten, damit sie unabhängig von der externen
-  // CSS-Datei und System-Styles zuverlässig greifen (kleine Thumbnails,
-  // eine Zeile pro Eintrag, scrollbare Liste).
+  // Das komplette Aussehen (nicht nur Layout, sondern auch Farben/Rahmen) wird
+  // direkt mit dem Dialog eingebettet statt aus der externen CSS-Datei bezogen.
+  // Grund: Externe Stylesheets waren in der Praxis nicht zuverlässig aktiv
+  // (Cache/Ladereihenfolge), wodurch der Dialog völlig ungestylt aussah. Für
+  // Farben wird zuerst ein einfacher rgba()-Wert gesetzt und danach – als
+  // Verbesserung, falls unterstützt – per color-mix() aus "currentColor"
+  // überschrieben, damit sich der Dialog an das aktive Theme anpasst, ohne
+  // dass ein fehlendes color-mix()-Support die Optik komplett unsichtbar macht.
   const style = `
     <style>
-      .git-object-sync-dialog .window-content { padding: 8px 10px; }
-      .gos-dialog { color: #e8e8ea; }
+      .gos-dialog { display: flex; flex-direction: column; gap: 10px; }
       .gos-dialog * { box-sizing: border-box; }
-      .gos-dialog .gos-search {
-        display: flex; align-items: center; gap: 6px;
-        padding: 5px 8px; margin: 0 0 6px;
-        background: #15151b; border: 1px solid #2a2a33; border-left: 3px solid #00e5ff;
-      }
-      .gos-dialog .gos-search i { color: #00e5ff; }
-      .gos-dialog .gos-search input {
-        flex: 1; background: transparent; border: none; outline: none; color: #e8e8ea;
-      }
-      .gos-dialog .gos-selectall {
-        display: flex; align-items: center; gap: 8px;
-        padding: 6px 4px; margin: 0 0 6px;
-        background: #0d0d10; color: #e6001f;
-        text-transform: uppercase; letter-spacing: 1.5px;
-        font-size: 0.8em; font-weight: 700;
-        border-bottom: 1px solid #8a0014; cursor: pointer;
-      }
-      .gos-dialog .gos-scroll {
-        max-height: 50vh; overflow-y: auto; padding-right: 4px;
-      }
-      .gos-dialog .gos-list { display: flex; flex-direction: column; gap: 4px; }
+
+      .gos-dialog .gos-search,
+      .gos-dialog .gos-toolbar,
       .gos-dialog .gos-group {
-        border: 1px solid #2a2a33; border-left: 3px solid #00e5ff;
-        background: #101014; margin: 0 0 4px;
+        border-radius: 6px;
+        background: rgba(127, 127, 127, 0.12);
+        background: color-mix(in srgb, currentColor 8%, transparent);
+        border: 1px solid rgba(127, 127, 127, 0.35);
+        border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
       }
+
+      .gos-dialog .gos-search {
+        display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+        transition: border-color 0.12s ease;
+      }
+      .gos-dialog .gos-search:focus-within {
+        border-color: rgba(127, 127, 127, 0.7);
+        border-color: color-mix(in srgb, currentColor 55%, transparent);
+      }
+      .gos-dialog .gos-search i { opacity: 0.65; }
+      .gos-dialog .gos-search input {
+        flex: 1; background: transparent; border: none; outline: none; color: inherit; font-size: 1em;
+      }
+
+      .gos-dialog .gos-toolbar { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; }
+      .gos-dialog .gos-selectall { display: flex; align-items: center; gap: 8px; padding: 2px; cursor: pointer; font-weight: 600; }
+      .gos-dialog .gos-opt { display: flex; align-items: center; gap: 8px; margin: 0; padding: 2px; cursor: pointer; }
+      .gos-dialog .gos-opt--col { flex-direction: column; align-items: stretch; gap: 3px; cursor: default; }
+      .gos-dialog .gos-opt--col > span { font-size: 0.85em; opacity: 0.75; }
+      .gos-dialog .gos-opt input[type="text"], .gos-dialog .gos-opt select {
+        background: rgba(127, 127, 127, 0.1);
+        background: color-mix(in srgb, currentColor 6%, transparent);
+        color: inherit;
+        border: 1px solid rgba(127, 127, 127, 0.35);
+        border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+        border-radius: 4px; padding: 4px 6px;
+      }
+      /* Trennlinie zwischen Options-Zeilen und "Alle auswählen" (nur bei vorhandenen Optionen). */
+      .gos-dialog .gos-toolbar .gos-opt ~ .gos-selectall {
+        padding-top: 8px; margin-top: 2px;
+        border-top: 1px solid rgba(127, 127, 127, 0.25);
+        border-top: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+      }
+
+      .gos-dialog input[type="checkbox"] { accent-color: currentColor; }
+
+      /* Sektionstrenner zwischen Toolbar und Objektliste. */
+      .gos-dialog .gos-divider {
+        height: 2px; margin: 0 2px; flex: 0 0 auto; border-radius: 1px;
+        background: rgba(127, 127, 127, 0.4);
+        background: color-mix(in srgb, currentColor 30%, transparent);
+      }
+
+      .gos-dialog .gos-scroll { max-height: 50vh; overflow-y: auto; padding-right: 2px; }
+      .gos-dialog .gos-list { display: flex; flex-direction: column; gap: 4px; }
+      .gos-dialog .gos-group { margin: 0 0 4px; overflow: hidden; }
+      .gos-dialog .gos-group .gos-list { padding: 5px 6px 7px; }
+
+      /* Gruppen-Kopf: deutlich als Überschrift erkennbar (größer, fett,       */
+      /* eigener Hintergrund + farbiger Akzentbalken links). */
       .gos-dialog .gos-group > summary {
-        display: flex; align-items: center; justify-content: space-between;
-        padding: 6px 8px; cursor: pointer; list-style: none;
-        color: #00e5ff; text-transform: uppercase; letter-spacing: 1px;
-        font-size: 0.8em; font-weight: 700;
+        display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+        cursor: pointer; list-style: none;
+        font-size: 1.05em; font-weight: 700;
+        border-left: 4px solid rgba(127, 127, 127, 0.55);
+        border-left: 4px solid color-mix(in srgb, currentColor 45%, transparent);
+        background: rgba(127, 127, 127, 0.08);
+        background: color-mix(in srgb, currentColor 6%, transparent);
       }
-      .gos-dialog .gos-group > summary::-webkit-details-marker { display: none; }
-      .gos-dialog .gos-group[open] > summary { border-bottom: 1px solid #2a2a33; }
+      .gos-dialog .gos-group > summary::-webkit-details-marker,
+      .gos-dialog .gos-group > summary::marker { display: none; content: ""; }
+      .gos-dialog .gos-group[open] > summary {
+        border-bottom: 1px solid rgba(127, 127, 127, 0.3);
+        border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+      }
+      .gos-dialog .gos-group-chevron { flex: 0 0 auto; font-size: 0.8em; opacity: 0.7; transition: transform 0.12s ease; }
+      .gos-dialog .gos-group[open] .gos-group-chevron { transform: rotate(90deg); }
+      .gos-dialog .gos-group-name { flex: 1; }
       .gos-dialog .gos-group-count {
-        background: #8a0014; color: #fff; border-radius: 10px;
-        padding: 0 8px; font-size: 0.9em;
+        flex: 0 0 auto; border-radius: 10px; padding: 0 8px; font-size: 0.85em; font-weight: 400;
+        background: rgba(127, 127, 127, 0.2);
+        background: color-mix(in srgb, currentColor 18%, transparent);
       }
-      .gos-dialog .gos-group .gos-list { padding: 4px; }
+
       .gos-dialog .gos-row {
-        display: flex; align-items: center; gap: 10px;
-        padding: 6px 8px; margin: 0;
-        background: #15151b; border: 1px solid #2a2a33;
-        border-left: 3px solid #8a0014; cursor: pointer;
+        display: grid; grid-template-columns: 18px 40px 1fr; align-items: center;
+        column-gap: 10px; padding: 5px 8px; cursor: pointer; border-radius: 3px;
+        border: 1px solid transparent;
+        transition: background 0.1s ease, border-color 0.1s ease;
       }
-      .gos-dialog .gos-row:hover { background: #1d1d26; border-left-color: #00e5ff; }
-      .gos-dialog .gos-row input[type="checkbox"] {
-        flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: #e6001f;
+      .gos-dialog .gos-row:hover {
+        background: rgba(127, 127, 127, 0.14);
+        background: color-mix(in srgb, currentColor 10%, transparent);
+        border-color: rgba(127, 127, 127, 0.3);
+        border-color: color-mix(in srgb, currentColor 22%, transparent);
       }
-      .gos-dialog .gos-hidden { display: none !important; }
-      .gos-dialog .gos-empty {
-        padding: 10px; text-align: center; color: #9a9aa2; font-style: italic;
-      }
-      .gos-dialog .gos-thumb {
-        flex: 0 0 auto;
-        width: 44px !important; height: 44px !important;
-        min-width: 44px; max-width: 44px;
-        object-fit: cover; background: #000;
-        border: 1px solid #2a2a33; border-radius: 2px;
+      .gos-dialog .gos-row input[type="checkbox"] { width: 16px; height: 16px; margin: 0; cursor: pointer; }
+      .gos-dialog .gos-thumb, .gos-dialog .gos-thumb--empty {
+        width: 40px; height: 40px; border-radius: 3px; object-fit: cover;
+        display: flex; align-items: center; justify-content: center;
+        border: 1px solid rgba(127, 127, 127, 0.3);
+        border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
       }
       .gos-dialog .gos-thumb--empty {
-        display: inline-flex; align-items: center; justify-content: center;
-        color: #4a4a55; font-size: 18px;
+        opacity: 0.5;
+        background: rgba(127, 127, 127, 0.1);
+        background: color-mix(in srgb, currentColor 6%, transparent);
       }
-      .gos-dialog .gos-text {
-        display: flex; flex-direction: column; min-width: 0; flex: 1; overflow: hidden;
-      }
-      .gos-dialog .gos-name {
-        font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      }
-      .gos-dialog .gos-desc {
-        font-size: 0.8em; color: #9a9aa2;
+      .gos-dialog .gos-text { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+      .gos-dialog .gos-name, .gos-dialog .gos-desc {
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
-      .gos-dialog .gos-options {
-        display: flex; flex-direction: column; gap: 8px;
-        padding: 8px; margin: 0 0 8px;
-        background: #101018; border: 1px solid #2a2a33; border-left: 3px solid #00e5ff;
-      }
-      .gos-dialog .gos-opt { display: flex; align-items: center; gap: 8px; margin: 0; cursor: pointer; }
-      .gos-dialog .gos-opt--col { flex-direction: column; align-items: stretch; gap: 3px; cursor: default; }
-      .gos-dialog .gos-opt--col > span { font-size: 0.8em; color: #9a9aa2; }
-      .gos-dialog .gos-opt input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: #e6001f; }
-      .gos-dialog .gos-opt input[type="text"], .gos-dialog .gos-opt select {
-        background: #15151b; color: #e8e8ea; border: 1px solid #2a2a33; padding: 4px 6px;
-      }
-    </style>`;
+      .gos-dialog .gos-name { font-weight: 600; }
+      .gos-dialog .gos-desc { font-size: 0.8em; opacity: 0.7; }
+      .gos-dialog .gos-hidden { display: none !important; }
+      .gos-dialog .gos-empty { padding: 12px; text-align: center; font-style: italic; opacity: 0.6; }
 
-  const options = optionsHtml ? `<div class="gos-options">${optionsHtml}</div>` : "";
+      .git-object-sync-dialog .window-content { padding: 10px 12px 12px; }
+    </style>`;
 
   return `
     ${style}
     <div class="gos-dialog">
-      ${options}
       <div class="gos-search">
         <i class="fa-solid fa-magnifying-glass"></i>
         <input type="text" class="gos-search-input" placeholder="${t("GOS.Dialog.SearchPlaceholder")}"/>
       </div>
-      <label class="gos-selectall">
-        <input type="checkbox" class="gos-select-all"/>
-        <span>${t("GOS.Dialog.SelectAll")}</span>
-      </label>
+      <div class="gos-toolbar">
+        ${optionsHtml}
+        <label class="gos-selectall">
+          <input type="checkbox" class="gos-select-all"/>
+          <span>${t("GOS.Dialog.SelectAll")}</span>
+        </label>
+      </div>
+      <div class="gos-divider"></div>
       <div class="gos-scroll">
         ${sections}
         <div class="gos-empty gos-hidden">${t("GOS.Dialog.NoMatches")}</div>
@@ -984,9 +1042,29 @@ function wireSelectAll(dialogElement) {
   const root = dialogElement?.element ?? dialogElement;
   if (!root || typeof root.querySelector !== "function") return;
 
-  // Kaputte/fehlende Vorschaubilder durch ein Platzhalter-Icon ersetzen.
+  // Kaputte/fehlende Vorschaubilder ersetzen. Beim Import kann die im JSON
+  // gespeicherte Bild-Referenz (bei "Sammelordner"-Export) auf keinen lokal
+  // erreichbaren Pfad mehr zeigen – dann erst den Fallback-Ort probieren
+  // (Server: tatsächlicher Ablageort des Exports; GitHub: Blob aus dem Baum
+  // als data:-URI), bevor endgültig ein Platzhalter-Icon angezeigt wird.
   root.querySelectorAll("img.gos-thumb").forEach((img) => {
-    img.addEventListener("error", () => {
+    img.addEventListener("error", async () => {
+      const stage = Number(img.dataset.gosStage || 0);
+      if (stage === 0 && img.dataset.fallbackUrl) {
+        img.dataset.gosStage = "1";
+        img.src = img.dataset.fallbackUrl;
+        return;
+      }
+      if (stage <= 1 && img.dataset.ghSha) {
+        img.dataset.gosStage = "2";
+        try {
+          const bytes = await githubReadBlob(img.dataset.ghSha);
+          img.src = `data:${img.dataset.mime || "image/png"};base64,${bytesToBase64(bytes)}`;
+          return;
+        } catch (err) {
+          console.warn(`${MODULE_ID} | Vorschau (GitHub-Blob) fehlgeschlagen`, err);
+        }
+      }
       const span = document.createElement("span");
       span.className = "gos-thumb gos-thumb--empty";
       span.innerHTML = '<i class="fa-solid fa-cube"></i>';
@@ -1135,6 +1213,32 @@ async function openExportDialog(type) {
   });
 }
 
+/**
+ * Vorschaubild-Infos für einen Import-Eintrag ermitteln. Die im JSON gespeicherte
+ * Referenz (`rawImg`) kann beim Export in einen Sammelordner umgeschrieben worden
+ * sein (`exportFlattenAssets`) und zeigt dann auf keinen lokal existierenden Pfad
+ * mehr – bis das Asset tatsächlich importiert wurde. Für die Vorschau werden
+ * daher zusätzlich Fallback-Kandidaten mitgegeben:
+ *  - Server-Modus: der Ort, an dem der Export das Asset tatsächlich abgelegt hat
+ *    (`<exportRoot>/assets/<referenz>`).
+ *  - GitHub-Modus: die SHA des Blobs im Repo-Baum (`assets/<referenz>`), aus der
+ *    bei Bedarf eine data:-URI gebaut wird.
+ */
+function buildImportImgInfo(rawImg, tree) {
+  const img = thumbUrl(rawImg);
+  if (!rawImg) return { img };
+  const clean = String(rawImg).split("?")[0].replace(/^\/+/, "");
+  const assetPath = `assets/${clean}`;
+  const info = { img, mime: guessMime(clean) };
+  if (tree) {
+    const sha = tree.get(assetPath);
+    if (sha) info.ghSha = sha;
+  } else {
+    info.fallbackUrl = dataUrl(`${exportRoot()}/${assetPath}`);
+  }
+  return info;
+}
+
 /** Import-Dialog für einen Dokumenttyp öffnen. */
 async function openImportDialog(type) {
   const label = game.i18n.localize(`DOCUMENT.${type}`) || type;
@@ -1162,7 +1266,7 @@ async function openImportDialog(type) {
       return {
         value: it.value,
         label: data?.name || nice || it.base,
-        img: thumbUrl(pickImg(data ?? {})),
+        ...buildImportImgInfo(pickImg(data ?? {}), tree),
         desc: docSummary(data ?? {}),
         group: groupLabel(type, data?.type)
       };
