@@ -2,9 +2,8 @@
  * Git Object Sync
  * -----------------------------------------------------------------------------
  * Exportiert einzelne Foundry-Dokumente (Actors, Items, Szenen, Journal) als
- * eigene JSON-Dateien in einen Ordner im Data-Verzeichnis und importiert sie
- * von dort wieder. Der Ordner wird serverseitig als Git-Repository versioniert
- * (siehe /server im mitgelieferten Paket).
+ * eigene JSON-Dateien direkt in ein GitHub-Repository und importiert sie von
+ * dort wieder – inklusive referenzierter Bilder/Maps als Assets.
  *
  * - Rechtsklick auf ein Objekt in der Seitenleiste -> "Export nach Git"
  * - Button in der Seitenleiste -> Checkbox-Dialog für Mehrfach-Export/-Import
@@ -26,15 +25,6 @@ const TYPE_CONFIG = {
 
 function t(key, data = {}) {
   return game.i18n.format(key, data);
-}
-
-function exportRoot() {
-  return game.settings.get(MODULE_ID, "exportPath") || "git-export";
-}
-
-/** Aktueller Sync-Modus: "server" (Git-Ordner) oder "github" (direkt via API). */
-function syncMode() {
-  return game.settings.get(MODULE_ID, "syncMode") || "server";
 }
 
 /** Sollen referenzierte Assets (Bilder, Maps, Audio) mitsynchronisiert werden? */
@@ -177,18 +167,13 @@ function base64ToBytes(b64) {
   return bytes;
 }
 
-async function uploadText(dir, name, text) {
-  const file = new File([text], name, { type: "application/json" });
-  await FilePicker.upload("data", dir, file, {}, { notify: false });
-}
-
 async function uploadBytes(dir, name, bytes) {
   const file = new File([bytes], name);
   await FilePicker.upload("data", dir, file, {}, { notify: false });
 }
 
 /* -------------------------------------------------------------------------- */
-/*  GitHub-API (Variante "UI-only")                                            */
+/*  GitHub-API                                                                 */
 /* -------------------------------------------------------------------------- */
 
 function ghConfig() {
@@ -405,8 +390,8 @@ async function exportDocument(doc, opts = {}) {
 
 /**
  * Mehrere Dokumente exportieren. Sammelt JSON + referenzierte Assets und
- * überträgt sie je nach Modus in den Git-Ordner (server) oder direkt zu
- * GitHub (github). Gibt { count, assets } zurück.
+ * pusht sie als einzelnen Commit direkt ins konfigurierte GitHub-Repository.
+ * Gibt { count, assets } zurück.
  *
  * `opts.flattenAssets` überschreibt die globale Einstellung für diesen Export.
  */
@@ -431,106 +416,55 @@ async function exportDocuments(docs, opts = {}) {
     jsonWrites.push({ folder: cfg.folder, fileName, json });
   }
 
-  if (syncMode() === "github") {
-    const progress = makeProgress(t("GOS.Progress.Exporting"));
-    try {
-      const files = [];
-      for (const w of jsonWrites) files.push({ path: `${w.folder}/${w.fileName}`, text: w.json });
-      let assets = 0;
-      const assetList = [...assetMap.entries()]; // [dest, src]
-      for (let i = 0; i < assetList.length; i++) {
-        const [dest, src] = assetList[i];
-        progress.update((i / (assetList.length + 1)) * 0.5, t("GOS.Progress.Asset", { name: basename(dest) }));
-        try {
-          files.push({ path: `assets/${dest}`, bytes: await fetchBytes(dataUrl(src)) });
-          assets++;
-        } catch (err) {
-          console.warn(`${MODULE_ID} | Asset übersprungen: ${src}`, err);
-        }
-      }
-      await githubPushFiles(
-        files,
-        `Git Object Sync: ${jsonWrites.length} Objekt(e), ${assets} Asset(s)`,
-        (done, total) =>
-          progress.update(0.5 + (done / total) * 0.5, t("GOS.Progress.Uploading", { done, total }))
-      );
-      progress.done(t("GOS.Progress.Done"));
-      return { count: jsonWrites.length, assets };
-    } finally {
-      // Ladeleiste immer ausblenden – auch wenn githubPushFiles abbricht.
-      progress.done("");
-    }
-  }
-
-  // Server-Modus: in den Git-Ordner schreiben.
   const progress = makeProgress(t("GOS.Progress.Exporting"));
-  const totalSteps = jsonWrites.length + assetMap.size;
-  let step = 0;
-  for (const w of jsonWrites) {
-    progress.update(step / totalSteps, t("GOS.Progress.Object", { name: w.fileName }));
-    const dir = `${exportRoot()}/${w.folder}`;
-    await ensureDir(dir);
-    await uploadText(dir, w.fileName, w.json);
-    step++;
-  }
-  let assets = 0;
-  for (const [dest, src] of assetMap) {
-    progress.update(step / totalSteps, t("GOS.Progress.Asset", { name: basename(dest) }));
-    try {
-      const bytes = await fetchBytes(dataUrl(src));
-      const dir = `${exportRoot()}/assets/${dirname(dest)}`.replace(/\/+$/, "");
-      await ensureDir(dir);
-      await uploadBytes(dir, basename(dest), bytes);
-      assets++;
-    } catch (err) {
-      console.warn(`${MODULE_ID} | Asset übersprungen: ${src}`, err);
+  try {
+    const files = [];
+    for (const w of jsonWrites) files.push({ path: `${w.folder}/${w.fileName}`, text: w.json });
+    let assets = 0;
+    const assetList = [...assetMap.entries()]; // [dest, src]
+    for (let i = 0; i < assetList.length; i++) {
+      const [dest, src] = assetList[i];
+      progress.update((i / (assetList.length + 1)) * 0.5, t("GOS.Progress.Asset", { name: basename(dest) }));
+      try {
+        files.push({ path: `assets/${dest}`, bytes: await fetchBytes(dataUrl(src)) });
+        assets++;
+      } catch (err) {
+        console.warn(`${MODULE_ID} | Asset übersprungen: ${src}`, err);
+      }
     }
-    step++;
+    await githubPushFiles(
+      files,
+      `Git Object Sync: ${jsonWrites.length} Objekt(e), ${assets} Asset(s)`,
+      (done, total) =>
+        progress.update(0.5 + (done / total) * 0.5, t("GOS.Progress.Uploading", { done, total }))
+    );
+    progress.done(t("GOS.Progress.Done"));
+    return { count: jsonWrites.length, assets };
+  } finally {
+    // Ladeleiste immer ausblenden – auch wenn githubPushFiles abbricht.
+    progress.done("");
   }
-  progress.done(t("GOS.Progress.Done"));
-  return { count: jsonWrites.length, assets };
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Import (beide Modi)                                                         */
+/*  Import                                                                     */
 /* -------------------------------------------------------------------------- */
 
 /** Verfügbare Import-Einträge eines Typs auflisten: [{ value, base }]. */
 async function listImportEntries(type) {
   const cfg = TYPE_CONFIG[type];
-  if (syncMode() === "github") {
-    const tree = await githubTree();
-    const prefix = `${cfg.folder}/`;
-    return [...tree.keys()]
-      .filter((p) => p.startsWith(prefix) && p.toLowerCase().endsWith(".json"))
-      .map((p) => ({ value: p, base: p.slice(prefix.length) }));
-  }
-  const urls = await listExportedFiles(type);
-  return urls.map((u) => ({ value: u, base: decodeURIComponent(u.split("/").pop()) }));
-}
-
-/** Server-Modus: exportierte JSON-Dateien eines Typs als URLs auflisten. */
-async function listExportedFiles(type) {
-  const cfg = TYPE_CONFIG[type];
-  const dir = `${exportRoot()}/${cfg.folder}`;
-  try {
-    const result = await FilePicker.browse("data", dir);
-    return (result.files ?? []).filter((f) => f.toLowerCase().endsWith(".json"));
-  } catch (err) {
-    return [];
-  }
+  const tree = await githubTree();
+  const prefix = `${cfg.folder}/`;
+  return [...tree.keys()]
+    .filter((p) => p.startsWith(prefix) && p.toLowerCase().endsWith(".json"))
+    .map((p) => ({ value: p, base: p.slice(prefix.length) }));
 }
 
 /** Rohdaten eines Import-Eintrags laden (für Vorschau/Import). */
 async function readEntryData(value, tree = null) {
-  if (syncMode() === "github") {
-    const sha = (tree ?? (await githubTree())).get(value);
-    if (!sha) return null;
-    return JSON.parse(new TextDecoder().decode(await githubReadBlob(sha)));
-  }
-  const res = await fetch(`${value}?t=${Date.now()}`);
-  if (!res.ok) return null;
-  return res.json();
+  const sha = (tree ?? (await githubTree())).get(value);
+  if (!sha) return null;
+  return JSON.parse(new TextDecoder().decode(await githubReadBlob(sha)));
 }
 
 /** Konfigurierter Ziel-Unterordner für importierte Assets (leer = Originalpfad). */
@@ -625,21 +559,6 @@ function rewriteAssetPaths(data, prefix) {
   visit(data);
 }
 
-/** Referenzierte Assets aus dem Git-Ordner an ihren Zielort zurückschreiben. */
-async function restoreAssetsServer(data, prefix = "") {
-  for (const a of collectAssetPaths(data)) {
-    try {
-      const bytes = await fetchBytes(dataUrl(`${exportRoot()}/assets/${a}`));
-      const target = importAssetTarget(a, prefix);
-      const dir = dirname(target);
-      if (dir) await ensureDir(dir);
-      await uploadBytes(dir, basename(target), bytes);
-    } catch (err) {
-      console.warn(`${MODULE_ID} | Asset-Restore übersprungen: ${a}`, err);
-    }
-  }
-}
-
 /** Referenzierte Assets aus GitHub an ihren Zielort zurückschreiben. */
 async function restoreAssetsGithub(data, tree, prefix = "") {
   for (const a of collectAssetPaths(data)) {
@@ -693,18 +612,10 @@ async function importDataDoc(type, data, folderOpts = {}) {
 async function importValue(type, value, tree = null, opts = {}) {
   const withAssets = syncAssets();
   const prefix = opts.assetPrefix ?? importAssetPrefix();
-  let data;
-  if (syncMode() === "github") {
-    const sha = (tree ?? (await githubTree())).get(value);
-    if (!sha) throw new Error(`Nicht im Repo: ${value}`);
-    data = JSON.parse(new TextDecoder().decode(await githubReadBlob(sha)));
-    if (withAssets) await restoreAssetsGithub(data, tree ?? (await githubTree()), prefix);
-  } else {
-    const response = await fetch(`${value}?t=${Date.now()}`); // Cache umgehen
-    if (!response.ok) throw new Error(`HTTP ${response.status} für ${value}`);
-    data = await response.json();
-    if (withAssets) await restoreAssetsServer(data, prefix);
-  }
+  const sha = (tree ?? (await githubTree())).get(value);
+  if (!sha) throw new Error(`Nicht im Repo: ${value}`);
+  const data = JSON.parse(new TextDecoder().decode(await githubReadBlob(sha)));
+  if (withAssets) await restoreAssetsGithub(data, tree ?? (await githubTree()), prefix);
   // Nach dem Zurückschreiben die Referenzen auf den Zielort umbiegen.
   rewriteAssetPaths(data, prefix);
   return importDataDoc(type, data, { folderMode: opts.folderMode, folderName: opts.folderName });
@@ -790,13 +701,11 @@ function readImportOptions(root) {
 }
 
 function buildCheckboxList(entries, optionsHtml = "") {
-  // entries: [{ value, label, img, desc, group, fallbackUrl, ghSha, mime }]
+  // entries: [{ value, label, img, desc, group, ghSha, mime }]
   const esc = escHtml;
 
   const rowHtml = (e) => {
-    const fallbackAttrs =
-      (e.fallbackUrl ? ` data-fallback-url="${esc(e.fallbackUrl)}"` : "") +
-      (e.ghSha ? ` data-gh-sha="${esc(e.ghSha)}" data-mime="${esc(e.mime || "image/png")}"` : "");
+    const fallbackAttrs = e.ghSha ? ` data-gh-sha="${esc(e.ghSha)}" data-mime="${esc(e.mime || "image/png")}"` : "";
     const thumb = e.img
       ? `<img class="gos-thumb" src="${esc(e.img)}" loading="lazy" alt="" style="width:40px;height:40px;"${fallbackAttrs}/>`
       : `<span class="gos-thumb gos-thumb--empty" style="width:40px;height:40px;"><i class="fa-solid fa-cube"></i></span>`;
@@ -1044,19 +953,13 @@ function wireSelectAll(dialogElement) {
 
   // Kaputte/fehlende Vorschaubilder ersetzen. Beim Import kann die im JSON
   // gespeicherte Bild-Referenz (bei "Sammelordner"-Export) auf keinen lokal
-  // erreichbaren Pfad mehr zeigen – dann erst den Fallback-Ort probieren
-  // (Server: tatsächlicher Ablageort des Exports; GitHub: Blob aus dem Baum
-  // als data:-URI), bevor endgültig ein Platzhalter-Icon angezeigt wird.
+  // erreichbaren Pfad mehr zeigen – dann erst den Blob aus dem GitHub-Baum als
+  // data:-URI probieren, bevor endgültig ein Platzhalter-Icon angezeigt wird.
   root.querySelectorAll("img.gos-thumb").forEach((img) => {
     img.addEventListener("error", async () => {
       const stage = Number(img.dataset.gosStage || 0);
-      if (stage === 0 && img.dataset.fallbackUrl) {
+      if (stage === 0 && img.dataset.ghSha) {
         img.dataset.gosStage = "1";
-        img.src = img.dataset.fallbackUrl;
-        return;
-      }
-      if (stage <= 1 && img.dataset.ghSha) {
-        img.dataset.gosStage = "2";
         try {
           const bytes = await githubReadBlob(img.dataset.ghSha);
           img.src = `data:${img.dataset.mime || "image/png"};base64,${bytesToBase64(bytes)}`;
@@ -1217,12 +1120,9 @@ async function openExportDialog(type) {
  * Vorschaubild-Infos für einen Import-Eintrag ermitteln. Die im JSON gespeicherte
  * Referenz (`rawImg`) kann beim Export in einen Sammelordner umgeschrieben worden
  * sein (`exportFlattenAssets`) und zeigt dann auf keinen lokal existierenden Pfad
- * mehr – bis das Asset tatsächlich importiert wurde. Für die Vorschau werden
- * daher zusätzlich Fallback-Kandidaten mitgegeben:
- *  - Server-Modus: der Ort, an dem der Export das Asset tatsächlich abgelegt hat
- *    (`<exportRoot>/assets/<referenz>`).
- *  - GitHub-Modus: die SHA des Blobs im Repo-Baum (`assets/<referenz>`), aus der
- *    bei Bedarf eine data:-URI gebaut wird.
+ * mehr – bis das Asset tatsächlich importiert wurde. Für die Vorschau wird daher
+ * zusätzlich die SHA des Blobs im Repo-Baum (`assets/<referenz>`) mitgegeben, aus
+ * der bei Bedarf eine data:-URI gebaut wird.
  */
 function buildImportImgInfo(rawImg, tree) {
   const img = thumbUrl(rawImg);
@@ -1230,12 +1130,8 @@ function buildImportImgInfo(rawImg, tree) {
   const clean = String(rawImg).split("?")[0].replace(/^\/+/, "");
   const assetPath = `assets/${clean}`;
   const info = { img, mime: guessMime(clean) };
-  if (tree) {
-    const sha = tree.get(assetPath);
-    if (sha) info.ghSha = sha;
-  } else {
-    info.fallbackUrl = dataUrl(`${exportRoot()}/${assetPath}`);
-  }
+  const sha = tree.get(assetPath);
+  if (sha) info.ghSha = sha;
   return info;
 }
 
@@ -1249,7 +1145,7 @@ async function openImportDialog(type) {
   }
 
   // Vorschaudaten (Name, Bild, Beschreibung) laden. tree wird wiederverwendet.
-  const tree = syncMode() === "github" ? await githubTree() : null;
+  const tree = await githubTree();
   const loadProgress = makeProgress(t("GOS.Progress.Loading"));
   let loaded = 0;
   const entries = await Promise.all(
@@ -1364,19 +1260,6 @@ function injectDirectoryButtons(type, html) {
 /* -------------------------------------------------------------------------- */
 
 Hooks.once("init", () => {
-  game.settings.register(MODULE_ID, "syncMode", {
-    name: t("GOS.Settings.SyncMode.Name"),
-    hint: t("GOS.Settings.SyncMode.Hint"),
-    scope: "world",
-    config: true,
-    type: String,
-    choices: {
-      server: t("GOS.Settings.SyncMode.Server"),
-      github: t("GOS.Settings.SyncMode.Github")
-    },
-    default: "server"
-  });
-
   game.settings.register(MODULE_ID, "syncAssets", {
     name: t("GOS.Settings.SyncAssets.Name"),
     hint: t("GOS.Settings.SyncAssets.Hint"),
@@ -1384,15 +1267,6 @@ Hooks.once("init", () => {
     config: true,
     type: Boolean,
     default: true
-  });
-
-  game.settings.register(MODULE_ID, "exportPath", {
-    name: t("GOS.Settings.ExportPath.Name"),
-    hint: t("GOS.Settings.ExportPath.Hint"),
-    scope: "world",
-    config: true,
-    type: String,
-    default: "git-export"
   });
 
   game.settings.register(MODULE_ID, "githubRepo", {
