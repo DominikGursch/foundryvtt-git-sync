@@ -851,7 +851,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
   // dass ein fehlendes color-mix()-Support die Optik komplett unsichtbar macht.
   const style = `
     <style>
-      .gos-dialog { display: flex; flex-direction: column; gap: 10px; }
+      .gos-dialog { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 0; }
       .gos-dialog * { box-sizing: border-box; }
 
       .gos-dialog .gos-search,
@@ -867,6 +867,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
       .gos-dialog .gos-search {
         display: flex; align-items: center; gap: 8px; padding: 7px 12px;
         transition: border-color 0.12s ease;
+        flex: 0 0 auto;
       }
       .gos-dialog .gos-search:focus-within {
         border-color: rgba(127, 127, 127, 0.7);
@@ -877,7 +878,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
         flex: 1; background: transparent; border: none; outline: none; color: inherit; font-size: 1em;
       }
 
-      .gos-dialog .gos-toolbar { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; }
+      .gos-dialog .gos-toolbar { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; flex: 0 0 auto; }
       .gos-dialog .gos-selectall { display: flex; align-items: center; gap: 8px; padding: 2px; cursor: pointer; font-weight: 600; }
       .gos-dialog .gos-opt { display: flex; align-items: center; gap: 8px; margin: 0; padding: 2px; cursor: pointer; }
       .gos-dialog .gos-opt--col { flex-direction: column; align-items: stretch; gap: 3px; cursor: default; }
@@ -906,7 +907,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
         background: color-mix(in srgb, currentColor 30%, transparent);
       }
 
-      .gos-dialog .gos-scroll { max-height: 50vh; overflow-y: auto; padding-right: 2px; }
+      .gos-dialog .gos-scroll { flex: 1 1 auto; min-height: 120px; overflow-y: auto; padding-right: 2px; }
       .gos-dialog .gos-list { display: flex; flex-direction: column; gap: 4px; }
       .gos-dialog .gos-group { margin: 0 0 4px; overflow: hidden; }
       .gos-dialog .gos-group .gos-list { padding: 5px 6px 7px; }
@@ -986,7 +987,12 @@ function buildCheckboxList(entries, optionsHtml = "") {
       .gos-dialog .gos-hidden { display: none !important; }
       .gos-dialog .gos-empty { padding: 12px; text-align: center; font-style: italic; opacity: 0.6; }
 
-      .git-object-sync-dialog .window-content { padding: 10px 12px 12px; }
+      .git-object-sync-dialog .window-content {
+        padding: 10px 12px 12px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
     </style>`;
 
   return `
@@ -1142,8 +1148,8 @@ async function openSelectionDialog({ title, content, confirmLabel, confirmIcon, 
   if (DV2) {
     try {
       await DV2.wait({
-        window: { title },
-        position: { width: 520 },
+        window: { title, resizable: true },
+        position: { width: 520, height: 600 },
         classes: ["git-object-sync-dialog"],
         content,
         rejectClose: false,
@@ -1183,7 +1189,7 @@ async function openSelectionDialog({ title, content, confirmLabel, confirmIcon, 
         render: (html) => wireSelectAll(html?.[0] ?? html),
         close: () => resolve()
       },
-      { classes: ["git-object-sync-dialog"] }
+      { classes: ["git-object-sync-dialog"], resizable: true }
     ).render(true);
   });
 }
