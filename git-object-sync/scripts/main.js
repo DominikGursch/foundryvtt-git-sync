@@ -991,7 +991,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
         padding: 10px 12px 12px;
         display: flex;
         flex-direction: column;
-        overflow: hidden;
+        min-height: 0;
       }
     </style>`;
 
