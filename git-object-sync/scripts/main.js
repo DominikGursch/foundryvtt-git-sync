@@ -851,7 +851,17 @@ function buildCheckboxList(entries, optionsHtml = "") {
   // dass ein fehlendes color-mix()-Support die Optik komplett unsichtbar macht.
   const style = `
     <style>
-      .gos-dialog { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 0; }
+      /* Ein einziger durchgehender Scrollbereich für das gesamte Fensterinhalt
+         (Suche, Toolbar UND Objektliste scrollen gemeinsam als eine Einheit),
+         statt nur die Liste intern scrollen zu lassen. */
+      .gos-dialog {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+      }
       .gos-dialog * { box-sizing: border-box; }
 
       .gos-dialog .gos-search,
@@ -907,7 +917,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
         background: color-mix(in srgb, currentColor 30%, transparent);
       }
 
-      .gos-dialog .gos-scroll { flex: 1 1 auto; min-height: 120px; overflow-y: auto; padding-right: 2px; }
+      .gos-dialog .gos-scroll { flex: 0 0 auto; padding-right: 2px; }
       .gos-dialog .gos-list { display: flex; flex-direction: column; gap: 4px; }
       .gos-dialog .gos-group { margin: 0 0 4px; overflow: hidden; }
       .gos-dialog .gos-group .gos-list { padding: 5px 6px 7px; }
@@ -987,12 +997,46 @@ function buildCheckboxList(entries, optionsHtml = "") {
       .gos-dialog .gos-hidden { display: none !important; }
       .gos-dialog .gos-empty { padding: 12px; text-align: center; font-style: italic; opacity: 0.6; }
 
-      .git-object-sync-dialog .window-content {
-        padding: 10px 12px 12px;
+      /* DialogV2 fügt zwischen ".window-content" und unserem Inhalt automatisch
+         ein "form.dialog-form.standard-form" und ein "div.dialog-content.standard-form"
+         ein. Beide sind standardmäßig Flex-Spalten mit "min-height: auto" und
+         "overflow: visible" - das unterbricht die Flex-Kette, wodurch weder die
+         Fenstergröße begrenzt noch unser innerer Scrollbereich (".gos-scroll")
+         wirksam wird. Daher müssen wir die gesamte Kette explizit durchreichen. */
+      .git-object-sync-dialog .window-content,
+      .git-object-sync-dialog .window-content .dialog-form,
+      .git-object-sync-dialog .window-content .dialog-content {
         display: flex;
         flex-direction: column;
+        flex: 1 1 auto;
         min-height: 0;
+        overflow: hidden;
       }
+      .git-object-sync-dialog .window-content {
+        padding: 10px 12px 12px;
+      }
+
+      /* Foundrys eingebautes Resize-Handle-Icon (ein winziges 11x11px
+         Hintergrundbild) ist je nach Theme/System kaum zu erkennen. Wir
+         zeichnen daher zusätzlich einen eigenen, garantiert sichtbaren
+         Grip-Indikator (diagonale Streifen in der Ecke) rein per CSS,
+         unabhängig vom Bild-Asset. */
+      .git-object-sync-dialog .window-resize-handle {
+        width: 15px;
+        height: 15px;
+        opacity: 0.6;
+        background-image: repeating-linear-gradient(
+          -45deg,
+          currentColor 0,
+          currentColor 1.5px,
+          transparent 1.5px,
+          transparent 4px
+        );
+        background-position: bottom right;
+        background-repeat: no-repeat;
+        clip-path: polygon(100% 0, 100% 100%, 0 100%);
+      }
+      .git-object-sync-dialog .window-resize-handle:hover { opacity: 1; }
     </style>`;
 
   return `
@@ -1171,9 +1215,22 @@ async function openSelectionDialog({ title, content, confirmLabel, confirmIcon, 
     }
   }
 
-  // Fallback: klassischer Dialog (auch wenn DialogV2 nicht verfügbar ist).
+  // Fallback: klassischer Dialog (V1). Dieser ist seit v12 als deprecated
+  // markiert und laut Foundry-Roadmap für die Entfernung in v14 vorgesehen.
+  // Wir greifen daher zuerst auf den bereits ins "appv1"-Namespace verschobenen
+  // Verweis zurück und erst danach auf den globalen Bezeichner - so stürzt der
+  // Code nicht mit einem harten ReferenceError ab, sobald "Dialog" irgendwann
+  // entfernt wird, sondern zeigt stattdessen eine verständliche Fehlermeldung.
+  const DialogV1 = foundry.appv1?.api?.Dialog ?? (typeof Dialog !== "undefined" ? Dialog : null);
+  if (!DialogV1) {
+    ui.notifications.error(
+      t("GOS.Notify.DialogError", { error: "Weder DialogV2 noch ein klassischer Dialog sind verfügbar." })
+    );
+    return;
+  }
+
   await new Promise((resolve) => {
-    new Dialog(
+    new DialogV1(
       {
         title,
         content,
