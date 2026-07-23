@@ -1,8 +1,8 @@
 {
   "id": "git-object-sync",
   "title": "Git Object Sync",
-  "description": "Export und Import einzelner Dokumente (Actors, Items, Szenen, Journal) inkl. Bilder/Maps – direkt zu GitHub (UI-only) oder in einen serverseitig versionierten Git-Ordner. Auswahl per Rechtsklick oder Checkbox-Dialog.",
-  "version": "1.5.2",
+  "description": "Export und Import einzelner Dokumente (Actors, Items, Szenen, Journal) inkl. Bilder/Maps – direkt zu GitHub. Auswahl per Rechtsklick oder Checkbox-Dialog, inkl. Delta-Anzeige (neu/geändert/unverändert).",
+  "version": "1.6.0",
   "compatibility": {
     "minimum": "12",
     "verified": "12",
