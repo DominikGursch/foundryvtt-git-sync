@@ -167,6 +167,25 @@ Damit „Gleicher Ordner wie beim Export" funktioniert, wird der Ordner-Pfad bei
 Export automatisch mitgespeichert – ältere Exporte (ohne diese Info) landen bei
 diesem Modus in der Wurzel.
 
+### Nur Deltas anzeigen (optional)
+
+Export- und Import-Dialog markieren jedes Objekt mit einem Status-Badge:
+
+- **Neu** — es existiert noch keine passende Datei im Repo bzw. kein passendes
+  lokales Dokument.
+- **Geändert** — Datei bzw. Dokument existiert bereits, der Inhalt weicht aber ab.
+- **Unverändert** — Inhalt ist identisch zum letzten Export/Import.
+
+Der Status wird lokal per Git-Blob-Hash-Vergleich ermittelt (kein zusätzlicher
+Download nötig). Über die Checkbox **„Unveränderte Objekte ausblenden"** direkt im
+Dialog kannst du unveränderte Einträge ausblenden und siehst so nur die Deltas.
+Das globale Modul-Setting **„Standardmäßig unveränderte Objekte ausblenden"**
+(Standard: aktiviert) legt nur den Vorgabewert dieser Checkbox fest.
+
+> **Hinweis:** Der Vergleich nutzt die aktuell global konfigurierten Export-
+> Einstellungen (Assets mitsichern, Sammelordner). Wurden diese seit dem letzten
+> Export/Import geändert, kann der angezeigte Status ungenau sein.
+
 ---
 
 ## So benutzt du es im Alltag

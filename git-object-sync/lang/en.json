@@ -15,6 +15,10 @@
   "GOS.Dialog.OptAssetTarget": "Target folder for assets (empty = original path)",
   "GOS.Dialog.OptFolderMode": "Folder behaviour on import",
   "GOS.Dialog.OptFolderName": "Fixed folder name (only for \"Fixed folder\")",
+  "GOS.Dialog.OptHideUnchanged": "Hide unchanged objects (show only deltas)",
+  "GOS.Dialog.StatusNew": "New",
+  "GOS.Dialog.StatusChanged": "Changed",
+  "GOS.Dialog.StatusUnchanged": "Unchanged",
   "GOS.Dialog.NothingToImport": "No files were found for this type.",
   "GOS.Dialog.NothingSelected": "Nothing was selected.",
   "GOS.Notify.Exported": "Exported {count} object(s) and {assets} asset(s).",
@@ -52,5 +56,7 @@
   "GOS.Settings.ImportFolderMode.None": "No folder (root)",
   "GOS.Settings.ImportFolderMode.Custom": "Fixed folder",
   "GOS.Settings.ImportFolderName.Name": "Import: fixed folder name",
-  "GOS.Settings.ImportFolderName.Hint": "Name of the folder that all imported objects are placed in when folder behaviour is set to \"Fixed folder\" (e.g. \"Git Import\")."
+  "GOS.Settings.ImportFolderName.Hint": "Name of the folder that all imported objects are placed in when folder behaviour is set to \"Fixed folder\" (e.g. \"Git Import\").",
+  "GOS.Settings.HideUnchanged.Name": "Hide unchanged objects by default",
+  "GOS.Settings.HideUnchanged.Hint": "Sets the default state of the \"Hide unchanged objects\" checkbox in the export/import dialog. The sync status (new/changed/unchanged) is determined by comparing content with the last exported/imported version using the current export settings (assets, collective folders), and may be inaccurate if those settings have since changed."
 }

@@ -15,6 +15,10 @@
   "GOS.Dialog.OptAssetTarget": "Ziel-Ordner für Assets (leer = Originalpfad)",
   "GOS.Dialog.OptFolderMode": "Ordner-Verhalten beim Import",
   "GOS.Dialog.OptFolderName": "Fester Ordnername (nur bei \"Fester Ordner\")",
+  "GOS.Dialog.OptHideUnchanged": "Unveränderte Objekte ausblenden (nur Deltas anzeigen)",
+  "GOS.Dialog.StatusNew": "Neu",
+  "GOS.Dialog.StatusChanged": "Geändert",
+  "GOS.Dialog.StatusUnchanged": "Unverändert",
   "GOS.Dialog.NothingToImport": "Für diesen Typ wurden keine Dateien gefunden.",
   "GOS.Dialog.NothingSelected": "Es wurde nichts ausgewählt.",
   "GOS.Notify.Exported": "{count} Objekt(e) und {assets} Asset(s) exportiert.",
@@ -52,5 +56,7 @@
   "GOS.Settings.ImportFolderMode.None": "Kein Ordner (Wurzel)",
   "GOS.Settings.ImportFolderMode.Custom": "Fester Ordner",
   "GOS.Settings.ImportFolderName.Name": "Import: fester Ordnername",
-  "GOS.Settings.ImportFolderName.Hint": "Name des Ordners, in den beim Ordner-Verhalten \"Fester Ordner\" alle importierten Objekte gelegt werden (z. B. \"Git Import\")."
+  "GOS.Settings.ImportFolderName.Hint": "Name des Ordners, in den beim Ordner-Verhalten \"Fester Ordner\" alle importierten Objekte gelegt werden (z. B. \"Git Import\").",
+  "GOS.Settings.HideUnchanged.Name": "Standardmäßig unveränderte Objekte ausblenden",
+  "GOS.Settings.HideUnchanged.Hint": "Legt den Standardzustand der Checkbox \"Unveränderte Objekte ausblenden\" im Export-/Import-Dialog fest. Der Sync-Status (neu/geändert/unverändert) wird durch Vergleich mit den zuletzt exportierten/importierten Inhalten anhand der aktuellen Export-Einstellungen (Assets, Sammelordner) ermittelt und kann bei abweichenden Einstellungen ungenau sein."
 }
