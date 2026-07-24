@@ -7,3 +7,7 @@ Desktop.ini
 
 # Logs
 *.log
+
+# Compendium Builder (compendium-builder/) – reines Dev-Tooling
+compendium-builder/node_modules/
+compendium-builder/.pack-build/

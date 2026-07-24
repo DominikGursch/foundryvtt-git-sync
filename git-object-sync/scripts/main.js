@@ -1,22 +1,36 @@
 /**
  * Git Object Sync
  * -----------------------------------------------------------------------------
- * Exportiert einzelne Foundry-Dokumente (Actors, Items, Szenen, Journal) als
- * eigene JSON-Dateien direkt in ein GitHub-Repository und importiert sie von
- * dort wieder – inklusive referenzierter Bilder/Maps als Assets.
+ * Exportiert einzelne Foundry-Dokumente (Actors, Items, Szenen, Journal) sowie
+ * eigene Welt-Kompendien als JSON-Dateien direkt in ein GitHub-Repository und
+ * importiert sie von dort wieder – inklusive referenzierter Bilder/Maps als Assets.
  *
  * - Rechtsklick auf ein Objekt in der Seitenleiste -> "Export nach Git"
  * - Button in der Seitenleiste -> Checkbox-Dialog für Mehrfach-Export/-Import
+ *   (auch in der Kompendium-Seitenleiste, dort über alle Welt-Kompendien hinweg)
  */
 
 const MODULE_ID = "git-object-sync";
 
-/** Konfiguration je Dokumenttyp. */
+/**
+ * Konfiguration je Dokumenttyp.
+ *
+ * `contextHook` ist der Kontextmenü-Hook aus Foundry v12 (`get<Doc>DirectoryEntryContext`,
+ * jQuery-Element im Callback). `contextHookV13` ist der in v13 umbenannte Nachfolger
+ * (`get<Doc>ContextOptions`, natives HTMLElement im Callback, siehe
+ * `client/applications/sidebar/document-directory.mjs`). Da pro installierter
+ * Foundry-Version immer nur einer der beiden tatsächlich feuert, ist die
+ * Doppel-Registrierung beider Namen gefahrlos und macht den Kontextmenü-Eintrag
+ * "Export nach Git" unter v12 UND v13 verfügbar (siehe addContextMenuEntry).
+ */
 const TYPE_CONFIG = {
-  Actor: { folder: "actors", collection: () => game.actors, uiKey: "actors", renderHook: "renderActorDirectory", contextHook: "getActorDirectoryEntryContext" },
-  Item: { folder: "items", collection: () => game.items, uiKey: "items", renderHook: "renderItemDirectory", contextHook: "getItemDirectoryEntryContext" },
-  Scene: { folder: "scenes", collection: () => game.scenes, uiKey: "scenes", renderHook: "renderSceneDirectory", contextHook: "getSceneDirectoryEntryContext" },
-  JournalEntry: { folder: "journal", collection: () => game.journal, uiKey: "journal", renderHook: "renderJournalDirectory", contextHook: "getJournalDirectoryEntryContext" }
+  Actor: { folder: "actors", collection: () => game.actors, uiKey: "actors", renderHook: "renderActorDirectory", contextHook: "getActorDirectoryEntryContext", contextHookV13: "getActorContextOptions" },
+  Item: { folder: "items", collection: () => game.items, uiKey: "items", renderHook: "renderItemDirectory", contextHook: "getItemDirectoryEntryContext", contextHookV13: "getItemContextOptions" },
+  Scene: { folder: "scenes", collection: () => game.scenes, uiKey: "scenes", renderHook: "renderSceneDirectory", contextHook: "getSceneDirectoryEntryContext", contextHookV13: "getSceneContextOptions" },
+  // v12-Hook-Name korrigiert: Foundry nutzt den vollen Dokumentnamen ("JournalEntry"),
+  // nicht nur "Journal" - der Eintrag "Export nach Git" fehlte dadurch bislang im
+  // Journal-Kontextmenü (siehe getJournalEntryDirectoryEntryContext in der Foundry-API).
+  JournalEntry: { folder: "journal", collection: () => game.journal, uiKey: "journal", renderHook: "renderJournalDirectory", contextHook: "getJournalEntryDirectoryEntryContext", contextHookV13: "getJournalEntryContextOptions" }
 };
 
 /* -------------------------------------------------------------------------- */
@@ -410,6 +424,12 @@ function buildExportJson(doc, flatten, withAssets) {
   const data = doc.toObject(); // vollständige Quelldaten inkl. _id
   // Ordner-Pfad der Oberfläche mitspeichern, damit der Import ihn wiederherstellen kann.
   foundry.utils.setProperty(data, `flags.${MODULE_ID}.folderPath`, folderPathOf(doc));
+  // Die rohe Ordner-ID gehört zur Welt-Seitenleiste dieser Installation und wird von
+  // unserem eigenen Import ohnehin nie gelesen (siehe resolveImportFolder) – sie würde
+  // aber ein externes Tool (z. B. eine Kompendium-Build-Pipeline), das diese Datei direkt
+  // liest, mit einer fremden/bedeutungslosen ID verwirren. Daher konsequent entfernen,
+  // analog zum Kompendium-Export (siehe buildCompendiumExportJson).
+  delete data.folder;
   const assetMap = withAssets ? remapExportAssets(data, flatten, doc.documentName) : new Map();
   const json = JSON.stringify(data, null, 2);
   const fileName = `${sanitize(doc.name)}__${doc.id}.json`;
@@ -442,6 +462,16 @@ async function exportDocuments(docs, opts = {}) {
     jsonWrites.push({ folder: cfg.folder, fileName, json });
   }
 
+  return pushExportBundle(jsonWrites, assetMap);
+}
+
+/**
+ * Gemeinsame Upload-Logik für einen Export: die gesammelten JSON-Dateien und
+ * die dazugehörigen Assets als einen einzigen Commit nach GitHub pushen.
+ * Wird sowohl vom Welt-Dokument-Export als auch vom Kompendium-Export genutzt,
+ * damit beide exakt dasselbe Fortschritts-/Commit-Verhalten haben.
+ */
+async function pushExportBundle(jsonWrites, assetMap) {
   const progress = makeProgress(t("GOS.Progress.Exporting"));
   try {
     const files = [];
@@ -688,6 +718,204 @@ async function importValue(type, value, tree = null, opts = {}) {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Kompendien (Welt-Kompendien)                                               */
+/* -------------------------------------------------------------------------- */
+/*  Kompendien werden bewusst nur für GM-eigene Welt-Kompendien unterstützt    */
+/*  (metadata.packageType === "world") – Modul-/System-Kompendien werden      */
+/*  übersprungen, weil deren Inhalt ohnehin über das jeweilige Paket           */
+/*  versioniert wird. Alle Objekte aller Welt-Kompendien werden für den       */
+/*  Export/Import-Dialog zu einer gemeinsamen, nach Kompendium gruppierten    */
+/*  Liste zusammengeführt (Auswahlwert "<pack.collection>::<id>"). Kompendium- */
+/*  interne Unterordner (getrennt von der Welt-Seitenleiste, siehe            */
+/*  ensureCompendiumFolderPath) werden dabei per Namenspfad mitexportiert und  */
+/*  im Ziel-Kompendium anhand des Namens wiederhergestellt bzw. neu angelegt.  */
+/* -------------------------------------------------------------------------- */
+
+/** Alle GM-eigenen Welt-Kompendien (keine Modul-/System-Kompendien). */
+function worldPacks() {
+  return game.packs.filter((p) => p.metadata.packageType === "world");
+}
+
+/** Bereits vorhandenes Welt-Kompendium anhand Anzeigename + Dokumenttyp suchen. */
+function findLocalWorldPack(type, label) {
+  return worldPacks().find((p) => p.documentName === type && p.title === label) ?? null;
+}
+
+/**
+ * Ziel-Kompendium für einen Import-Lauf auflösen: ein vorhandenes Welt-Kompendium
+ * mit gleichem Namen + Typ wiederverwenden, sonst neu anlegen. `packCache` bündelt
+ * das Ergebnis pro Lauf (Schlüssel "<Typ>::<Label>"), damit bei mehreren
+ * Dokumenten desselben Kompendiums nicht mehrfach gesucht bzw. angelegt wird.
+ */
+async function resolveOrCreateWorldPack(type, label, packCache) {
+  const key = `${type}::${label}`;
+  if (packCache.has(key)) return packCache.get(key);
+  let pack = findLocalWorldPack(type, label);
+  if (!pack) {
+    const CompendiumCollectionCls = foundry.documents?.collections?.CompendiumCollection ?? CompendiumCollection;
+    pack = await CompendiumCollectionCls.createCompendium({
+      type,
+      label,
+      name: label.slugify({ strict: true })
+    });
+  }
+  packCache.set(key, pack);
+  return pack;
+}
+
+/**
+ * Ordner-Hierarchie (nach Namen) innerhalb eines Kompendiums anlegen; Blatt-ID
+ * zurückgeben. Analog zu `ensureFolderPath()`, aber kompendium-intern statt in
+ * der Welt-Seitenleiste (`pack.folders` statt `game.folders`, Anlage per
+ * `Folder.create({..}, {pack: pack.collection})`). Neu angelegte Ordner werden
+ * von Foundry automatisch in `pack.folders` nachgeführt, sodass mehrere
+ * Dokumente desselben Kompendiums im selben Import-Lauf sich denselben,
+ * bereits angelegten Ordner teilen statt ihn mehrfach zu erzeugen.
+ */
+async function ensureCompendiumFolderPath(pack, names) {
+  let parentId = null;
+  for (const name of names) {
+    if (!name) continue;
+    let folder = pack.folders.find(
+      (f) => f.name === name && (f.folder?.id ?? null) === parentId
+    );
+    if (!folder) {
+      folder = await Folder.create(
+        { name, type: pack.documentName, folder: parentId },
+        { pack: pack.collection }
+      );
+    }
+    parentId = folder.id;
+  }
+  return parentId;
+}
+
+/**
+ * Baut die Export-Nutzdaten für ein einzelnes Kompendium-Dokument – analog zu
+ * `buildExportJson`, aber mit eigenem Ordner-Schema (`compendia/<collection>`)
+ * und Kompendium-Metadaten (Name + Typ) als Flag, damit der Import das richtige
+ * Kompendium wiederfinden bzw. neu anlegen kann. Die kompendium-interne
+ * Ordner-Hierarchie (Wurzel -> Blatt, per Namen) wird ebenfalls als Flag
+ * mitgegeben, da die rohe Ordner-ID zu einem fremden Kompendium auf der
+ * Zielinstallation gehört und daher nicht direkt wiederverwendbar ist
+ * (siehe ensureCompendiumFolderPath / importCompendiumDataDoc).
+ */
+function buildCompendiumExportJson(doc, pack, flatten, withAssets) {
+  const data = doc.toObject();
+  const folderPath = folderPathOf(doc);
+  delete data.folder;
+  foundry.utils.setProperty(data, `flags.${MODULE_ID}.compendium`, {
+    collection: pack.collection,
+    label: pack.title,
+    type: pack.documentName,
+    folderPath
+  });
+  const assetMap = withAssets ? remapExportAssets(data, flatten, pack.documentName) : new Map();
+  const json = JSON.stringify(data, null, 2);
+  const fileName = `${sanitize(doc.name)}__${doc.id}.json`;
+  return { folder: `compendia/${pack.collection}`, fileName, json, assetMap };
+}
+
+/** Mehrere Kompendium-Dokumente exportieren. `entries`: [{ doc, pack }]. */
+async function exportCompendiumDocuments(entries, opts = {}) {
+  const withAssets = syncAssets();
+  const flatten = opts.flattenAssets ?? exportFlattenAssets();
+  const jsonWrites = [];
+  const assetMap = new Map();
+
+  for (const { doc, pack } of entries) {
+    const { folder, fileName, json, assetMap: docAssets } = buildCompendiumExportJson(doc, pack, flatten, withAssets);
+    for (const [dest, src] of docAssets) if (!assetMap.has(dest)) assetMap.set(dest, src);
+    jsonWrites.push({ folder, fileName, json });
+  }
+
+  return pushExportBundle(jsonWrites, assetMap);
+}
+
+/** Sync-Status eines Kompendium-Dokuments gegenüber dem GitHub-Repo (siehe exportDeltaStatus). */
+async function compendiumExportDeltaStatus(doc, pack, tree, flatten, withAssets) {
+  const { folder, fileName, json } = buildCompendiumExportJson(doc, pack, flatten, withAssets);
+  const remoteSha = tree.get(`${folder}/${fileName}`);
+  if (!remoteSha) return "new";
+  const localSha = await gitBlobSha1(json);
+  return localSha === remoteSha ? "unchanged" : "changed";
+}
+
+/** Verfügbare Kompendium-Import-Einträge aus einem bereits geladenen Baum auflisten. */
+function listCompendiumImportEntriesFromTree(tree) {
+  const prefix = "compendia/";
+  return [...tree.keys()]
+    .filter((p) => p.startsWith(prefix) && p.toLowerCase().endsWith(".json"))
+    .map((p) => ({ value: p, base: basename(p) }));
+}
+
+/**
+ * Sync-Status eines Kompendium-Import-Eintrags gegenüber dem lokalen Kompendium
+ * ermitteln (siehe importDeltaStatus). `meta` sind die im Export hinterlegten
+ * Kompendium-Metadaten (Typ + Anzeigename) aus `flags.<MODULE_ID>.compendium`.
+ */
+async function compendiumImportDeltaStatus(meta, data, tree, entryValue, flatten, withAssets) {
+  if (!data?._id || !meta?.type) return "new";
+  const pack = findLocalWorldPack(meta.type, meta.label);
+  if (!pack) return "new";
+  const local = await pack.getDocument(data._id);
+  if (!local) return "new";
+  const { json } = buildCompendiumExportJson(local, pack, flatten, withAssets);
+  const localSha = await gitBlobSha1(json);
+  const remoteSha = tree.get(entryValue);
+  return localSha === remoteSha ? "unchanged" : "changed";
+}
+
+/**
+ * Aus geladenen Daten ein Kompendium-Dokument anlegen bzw. aktualisieren.
+ * Stellt zuvor die kompendium-interne Ordner-Hierarchie (per Namenspfad aus
+ * `flags.<MODULE_ID>.compendium.folderPath`) im Ziel-Kompendium wieder her
+ * bzw. legt sie neu an (siehe ensureCompendiumFolderPath) und setzt
+ * `data.folder` auf die aufgelöste Blatt-Ordner-ID.
+ */
+async function importCompendiumDataDoc(pack, data) {
+  const cls = getDocumentClass(pack.documentName);
+  const existing = data._id ? await pack.getDocument(data._id) : null;
+  const overwrite = game.settings.get(MODULE_ID, "overwriteImport");
+  const path = foundry.utils.getProperty(data, `flags.${MODULE_ID}.compendium.folderPath`) || [];
+  data.folder = Array.isArray(path) && path.length ? await ensureCompendiumFolderPath(pack, path) : null;
+
+  if (existing) {
+    if (overwrite) {
+      await existing.update(data, { diff: false, recursive: false });
+      return "updated";
+    }
+    const clone = foundry.utils.deepClone(data);
+    delete clone._id;
+    await cls.create(clone, { pack: pack.collection });
+    return "copied";
+  }
+
+  await cls.create(data, { pack: pack.collection, keepId: true });
+  return "created";
+}
+
+/**
+ * Einen Kompendium-Import-Eintrag laden (inkl. Assets) und in das passende,
+ * ggf. neu angelegte Welt-Kompendium importieren. `packCache` bündelt bereits
+ * aufgelöste/angelegte Kompendien für den laufenden Import (siehe resolveOrCreateWorldPack).
+ */
+async function importCompendiumValue(value, tree, opts, packCache) {
+  const withAssets = syncAssets();
+  const prefix = opts.assetPrefix ?? importAssetPrefix();
+  const sha = tree.get(value);
+  if (!sha) throw new Error(`Nicht im Repo: ${value}`);
+  const data = JSON.parse(new TextDecoder().decode(await githubReadBlob(sha)));
+  if (withAssets) await restoreAssetsGithub(data, tree, prefix);
+  rewriteAssetPaths(data, prefix);
+
+  const meta = foundry.utils.getProperty(data, `flags.${MODULE_ID}.compendium`) || {};
+  if (!meta.type) throw new Error("Kompendium-Metadaten fehlen in dieser Export-Datei.");
+  const pack = await resolveOrCreateWorldPack(meta.type, meta.label || "Import", packCache);
+  return importCompendiumDataDoc(pack, data);
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Dialoge                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -776,6 +1004,20 @@ function readImportOptions(root) {
     folderMode: root.querySelector(".gos-opt-foldermode")?.value || undefined,
     folderName: (root.querySelector(".gos-opt-foldername")?.value ?? "").trim()
   };
+}
+
+/**
+ * Options-Block für den Kompendium-Import-Dialog (Asset-Zielordner + Delta-Filter).
+ * Ohne Ordner-Modus, da Kompendium-Dokumente keinen Seitenleisten-Ordner haben.
+ */
+function compendiumImportOptionsHtml() {
+  const prefix = importAssetPrefix();
+  return `
+    <label class="gos-opt gos-opt--col">
+      <span>${t("GOS.Dialog.OptAssetTarget")}</span>
+      <input type="text" class="gos-opt-assetprefix" value="${escHtml(prefix)}" placeholder="z. B. git-import"/>
+    </label>
+    ${deltaFilterOptionHtml()}`;
 }
 
 function buildCheckboxList(entries, optionsHtml = "") {
@@ -1308,6 +1550,76 @@ async function openExportDialog(type) {
 }
 
 /**
+ * Export-Dialog für alle Welt-Kompendien öffnen. Anders als bei den übrigen
+ * Typen gibt es hier keinen einzelnen Dokumenttyp – stattdessen werden alle
+ * Objekte aller Welt-Kompendien in einer gemeinsamen, nach Kompendium
+ * gruppierten Liste angeboten (Auswahlwert "<pack.collection>::<id>").
+ */
+async function openCompendiumExportDialog() {
+  const label = t("GOS.Dialog.CompendiaLabel");
+  const packs = worldPacks();
+  if (!packs.length) {
+    return ui.notifications.warn(t("GOS.Dialog.NoCompendia"));
+  }
+
+  let tree = null;
+  try {
+    tree = await githubTree();
+  } catch (err) {
+    console.warn(`${MODULE_ID} | Sync-Status konnte nicht ermittelt werden`, err);
+  }
+  const withAssets = syncAssets();
+  const flatten = exportFlattenAssets();
+
+  const entries = [];
+  for (const pack of packs) {
+    const docs = (await pack.getDocuments()).slice().sort((a, b) => a.name.localeCompare(b.name));
+    for (const d of docs) {
+      const src = d.toObject();
+      entries.push({
+        value: `${pack.collection}::${d.id}`,
+        label: d.name,
+        img: thumbUrl(pickImg(src)),
+        desc: docSummary(src),
+        group: pack.title,
+        status: tree ? await compendiumExportDeltaStatus(d, pack, tree, flatten, withAssets) : null
+      });
+    }
+  }
+
+  const content = entries.length
+    ? buildCheckboxList(entries, exportOptionsHtml())
+    : `<p>${t("GOS.Dialog.NothingSelected")}</p>`;
+
+  await openSelectionDialog({
+    title: t("GOS.Dialog.ExportTitle", { label }),
+    content,
+    confirmLabel: t("GOS.Dialog.ExportButton"),
+    confirmIcon: "fa-solid fa-code-branch",
+    onConfirm: async (root) => {
+      const values = readSelected(root);
+      if (!values.length) return ui.notifications.warn(t("GOS.Dialog.NothingSelected"));
+      const selected = [];
+      for (const v of values) {
+        const sep = v.indexOf("::");
+        if (sep < 0) continue;
+        const pack = game.packs.get(v.slice(0, sep));
+        const doc = pack?.get(v.slice(sep + 2));
+        if (pack && doc) selected.push({ doc, pack });
+      }
+      const opts = readExportOptions(root);
+      try {
+        const { count, assets } = await exportCompendiumDocuments(selected, opts);
+        ui.notifications.info(t("GOS.Notify.Exported", { count, assets }));
+      } catch (err) {
+        console.error(`${MODULE_ID} | Export`, err);
+        ui.notifications.error(t("GOS.Notify.ExportError", { error: err.message }));
+      }
+    }
+  });
+}
+
+/**
  * Vorschaubild-Infos für einen Import-Eintrag ermitteln. Die im JSON gespeicherte
  * Referenz (`rawImg`) kann beim Export in einen Sammelordner umgeschrieben worden
  * sein (`exportFlattenAssets`) und zeigt dann auf keinen lokal existierenden Pfad
@@ -1397,9 +1709,99 @@ async function openImportDialog(type) {
   });
 }
 
+/**
+ * Import-Dialog für alle Welt-Kompendien öffnen. Zeigt alle im Repo unter
+ * `compendia/` gefundenen Einträge in einer nach Kompendium-Anzeigename
+ * gruppierten Liste; das Ziel-Kompendium wird beim eigentlichen Import pro
+ * Eintrag anhand der gespeicherten Metadaten aufgelöst bzw. neu angelegt.
+ */
+async function openCompendiumImportDialog() {
+  const label = t("GOS.Dialog.CompendiaLabel");
+  const tree = await githubTree();
+  const items = listCompendiumImportEntriesFromTree(tree);
+
+  if (!items.length) {
+    return ui.notifications.warn(t("GOS.Dialog.NothingToImport"));
+  }
+
+  const withAssets = syncAssets();
+  const flatten = exportFlattenAssets();
+  const loadProgress = makeProgress(t("GOS.Progress.Loading"));
+  let loaded = 0;
+  const entries = await Promise.all(
+    items.map(async (it) => {
+      const nice = it.base.replace(/__[A-Za-z0-9]+\.json$/i, "").replace(/\.json$/i, "");
+      let data = null;
+      let status = null;
+      try {
+        data = await readEntryData(it.value, tree);
+      } catch (err) {
+        console.warn(`${MODULE_ID} | Vorschau übersprungen: ${it.value}`, err);
+      }
+      const meta = data ? foundry.utils.getProperty(data, `flags.${MODULE_ID}.compendium`) : null;
+      try {
+        status = meta ? await compendiumImportDeltaStatus(meta, data, tree, it.value, flatten, withAssets) : "new";
+      } catch (err) {
+        console.warn(`${MODULE_ID} | Sync-Status konnte nicht ermittelt werden: ${it.value}`, err);
+      }
+      loaded++;
+      loadProgress.update(loaded / items.length);
+      return {
+        value: it.value,
+        label: data?.name || nice || it.base,
+        ...buildImportImgInfo(pickImg(data ?? {}), tree),
+        desc: docSummary(data ?? {}),
+        group: meta?.label || t("GOS.Dialog.GroupOther"),
+        status
+      };
+    })
+  );
+  loadProgress.done();
+
+  await openSelectionDialog({
+    title: t("GOS.Dialog.ImportTitle", { label }),
+    content: buildCheckboxList(entries, compendiumImportOptionsHtml()),
+    confirmLabel: t("GOS.Dialog.ImportButton"),
+    confirmIcon: "fa-solid fa-download",
+    onConfirm: async (root) => {
+      const values = readSelected(root);
+      if (!values.length) return ui.notifications.warn(t("GOS.Dialog.NothingSelected"));
+      const opts = readImportOptions(root);
+      let count = 0;
+      const packCache = new Map(); // "<Typ>::<Label>" -> aufgelöstes/angelegtes Kompendium (pro Lauf)
+      const progress = makeProgress(t("GOS.Progress.Importing"));
+      for (let i = 0; i < values.length; i++) {
+        progress.update(i / values.length);
+        try {
+          await importCompendiumValue(values[i], tree, opts, packCache);
+          count++;
+        } catch (err) {
+          console.error(`${MODULE_ID} | Import`, err);
+          ui.notifications.error(t("GOS.Notify.ImportError", { error: err.message }));
+        }
+      }
+      progress.done(t("GOS.Progress.Done"));
+      ui.notifications.info(t("GOS.Notify.Imported", { count }));
+    }
+  });
+}
+
 /* -------------------------------------------------------------------------- */
 /*  UI-Integration                                                             */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Liest die Dokument-ID aus dem Kontextmenü-Zielelement. Foundry v12 übergibt ein
+ * jQuery-Objekt (`li.data(...)`/`li.attr(...)`), v13 dagegen ein natives HTMLElement
+ * ohne jQuery-Methoden (`ContextMenu` wird dort mit `{jQuery: false}` konstruiert,
+ * siehe document-directory.mjs). `.closest()` fängt zusätzlich ab, falls das Element
+ * selbst (statt eines Kind-Elements) das Ziel ist - closest() matched auch sich selbst.
+ */
+function contextMenuDocumentId(li) {
+  const el = li?.jquery ? li[0] : li;
+  const row = el?.closest?.("[data-document-id], [data-entry-id]") ?? el;
+  return row?.dataset?.documentId ?? row?.dataset?.entryId ?? row?.getAttribute?.("data-document-id") ?? row?.getAttribute?.("data-entry-id");
+}
 
 /** Kontextmenü-Eintrag "Export nach Git" für ein einzelnes Objekt. */
 function addContextMenuEntry(type, entryOptions) {
@@ -1409,7 +1811,7 @@ function addContextMenuEntry(type, entryOptions) {
     icon: '<i class="fa-solid fa-code-branch"></i>',
     condition: () => game.user.isGM,
     callback: async (li) => {
-      const id = li.data("documentId") ?? li.data("entryId") ?? li.attr("data-document-id") ?? li.attr("data-entry-id");
+      const id = contextMenuDocumentId(li);
       const doc = cfg.collection().get(id);
       if (!doc) return;
       try {
@@ -1423,8 +1825,11 @@ function addContextMenuEntry(type, entryOptions) {
   });
 }
 
-/** Export/Import-Buttons oben in der jeweiligen Verzeichnis-Seitenleiste. */
-function injectDirectoryButtons(type, html) {
+/**
+ * Export/Import-Buttons in eine Verzeichnis-Kopfzeile einfügen. Gemeinsame
+ * Basis für die Welt-Dokument-Verzeichnisse und die Kompendium-Seitenleiste.
+ */
+function injectActionButtons(html, onExport, onImport) {
   if (!game.user.isGM) return;
   const root = html instanceof jQuery ? html[0] : html;
   const header = root.querySelector(".directory-header");
@@ -1450,9 +1855,19 @@ function injectDirectoryButtons(type, html) {
     }
   };
 
-  wrap.querySelector(".gos-export").addEventListener("click", surface(() => openExportDialog(type)));
-  wrap.querySelector(".gos-import").addEventListener("click", surface(() => openImportDialog(type)));
+  wrap.querySelector(".gos-export").addEventListener("click", surface(onExport));
+  wrap.querySelector(".gos-import").addEventListener("click", surface(onImport));
   header.appendChild(wrap);
+}
+
+/** Export/Import-Buttons oben in der jeweiligen Verzeichnis-Seitenleiste (Welt-Dokumente). */
+function injectDirectoryButtons(type, html) {
+  injectActionButtons(html, () => openExportDialog(type), () => openImportDialog(type));
+}
+
+/** Export/Import-Buttons oben in der Kompendium-Seitenleiste (Welt-Kompendien). */
+function injectCompendiumButtons(html) {
+  injectActionButtons(html, () => openCompendiumExportDialog(), () => openCompendiumImportDialog());
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1562,9 +1977,16 @@ Hooks.once("init", () => {
 // die schon gerendert wurden (z. B. der standardmäßig offene Actors-Tab).
 Hooks.once("setup", () => {
   for (const [type, cfg] of Object.entries(TYPE_CONFIG)) {
+    // Beide Kontextmenü-Hook-Namen registrieren (v12 + v13, siehe TYPE_CONFIG-Kommentar) -
+    // pro Foundry-Version feuert ohnehin nur einer der beiden, also kein Doppel-Eintrag.
     Hooks.on(cfg.contextHook, (html, entryOptions) => addContextMenuEntry(type, entryOptions));
+    Hooks.on(cfg.contextHookV13, (html, entryOptions) => addContextMenuEntry(type, entryOptions));
     Hooks.on(cfg.renderHook, (app, html) => injectDirectoryButtons(type, html));
   }
+  // Kompendium-Seitenleiste: eigener Render-Hook, da Kompendien kein Element von
+  // TYPE_CONFIG sind (ein Kompendium-Pack ist kein einzelnes Dokument, sondern
+  // ein Container für viele Dokumente unterschiedlichen Typs).
+  Hooks.on("renderCompendiumDirectory", (app, html) => injectCompendiumButtons(html));
 });
 
 Hooks.once("ready", () => {
@@ -1575,6 +1997,7 @@ Hooks.once("ready", () => {
     const app = ui[cfg.uiKey];
     if (app?.element) injectDirectoryButtons(type, app.element);
   }
+  if (ui.compendium?.element) injectCompendiumButtons(ui.compendium.element);
 
   // Öffentliche API, z. B. für eigene Makros.
   const mod = game.modules.get(MODULE_ID);
@@ -1585,7 +2008,11 @@ Hooks.once("ready", () => {
       openExportDialog,
       openImportDialog,
       listImportEntries,
-      importValue
+      importValue,
+      openCompendiumExportDialog,
+      openCompendiumImportDialog,
+      exportCompendiumDocuments,
+      importCompendiumValue
     };
   }
 

@@ -1,10 +1,12 @@
-# Git Object Sync (FoundryVTT v12)
+# Git Object Sync (FoundryVTT v12 / v13)
+
+🇩🇪 Deutsch (diese Datei) · 🇬🇧 [English](README.en.md)
 
 Mit diesem Modul kannst du einzelne FoundryVTT-Objekte – **Charaktere (Actors),
-Items, Szenen und Journale** – inklusive ihrer **Bilder und Maps** sichern und
-wiederherstellen. Gespeichert wird bei **GitHub** (ein kostenloser Online-Speicher
-für genau solche Dateien) – **direkt aus der Foundry-Oberfläche**, ohne Server
-und ohne Terminal.
+Items, Szenen, Journale und eigene Welt-Kompendien** – inklusive ihrer
+**Bilder und Maps** sichern und wiederherstellen. Gespeichert wird bei
+**GitHub** (ein kostenloser Online-Speicher für genau solche Dateien) –
+**direkt aus der Foundry-Oberfläche**, ohne Server und ohne Terminal.
 
 **Kurz gesagt:** Du klickst in Foundry auf „Exportieren" – den Rest übernimmt das Modul.
 
@@ -18,12 +20,20 @@ und ohne Terminal.
   (ein einzelner Commit pro Export).
 - **Bilder & Maps inklusive:** Referenzierte Bilder (Karten, Portraits, Token)
   werden auf Wunsch mitgesichert, damit Objekte vollständig übertragen werden.
+- **Charaktere komplett:** Ein Actor nimmt beim Export/Import automatisch seine
+  **getragenen Items, Active Effects und Prototype-Token-Daten** mit – es geht
+  nichts verloren.
+- **Eigene Welt-Kompendien:** Auch selbst angelegte Kompendien (samt ihrer
+  kompendium-internen Ordnerstruktur) lassen sich sichern und wiederherstellen
+  – siehe **[Kompendien sichern und wiederherstellen](#kompendien-sichern-und-wiederherstellen)**.
 - **Importieren:** Auf derselben oder einer anderen Foundry-Instanz die Dateien
   wieder einspielen – ebenfalls per Klick.
 
 ### Was du brauchst
 
-- Eine **FoundryVTT v12**-Installation (du als **Spielleiter/GM**).
+- Eine **FoundryVTT v12**-Installation (du als **Spielleiter/GM**). Die
+  Kontextmenüs und Buttons funktionieren auch unter **v13**; ausführlich
+  getestet ist bisher aber nur v12 (siehe [Kompatibilität](#kompatibilität)).
 - Ein kostenloses **GitHub-Konto**.
 
 **Schnellstart:**
@@ -39,6 +49,9 @@ git-object-sync/            <- Das FoundryVTT-Modul (kommt in Data/modules/)
   module.json
   scripts/main.js
   lang/{de,en}.json
+compendium-builder/         <- Optionales CI-Werkzeug für dein PRIVATES Inhalte-Repo
+                                (baut aus den Exporten echte, installierbare
+                                Kompendien – siehe compendium-builder/README.md)
 ```
 
 ---
@@ -213,6 +226,42 @@ Nachladen ist nicht nötig.
 
 ---
 
+## Kompendien sichern und wiederherstellen
+
+Genau wie einzelne Objekte lassen sich auch **eigene, in dieser Welt angelegte
+Kompendien** sichern und wiederherstellen. Kompendien, die aus einem
+**System** oder **Modul** kommen, werden **nicht** angeboten – deren Inhalt
+kommt ja bereits über die jeweilige Installation und muss nicht separat
+gesichert werden.
+
+1. Öffne die **Kompendium-Seitenleiste** (Reiter „Compendia"/„Kompendien").
+2. Oben erscheinen dieselben zwei Buttons **„Git Export …"** / **„Git Import …"**
+   wie bei Actors, Items, Szenen und Journalen – hier zeigen sie **alle Einträge
+   deiner eigenen Welt-Kompendien**, gruppiert nach Kompendium-Name.
+3. **Export:** Einträge auswählen (auch über mehrere Kompendien hinweg möglich)
+   und exportieren. Sie landen im Repo unter `compendia/<technischer-Name>/…`.
+4. **Import:** Die Datei merkt sich, aus welchem Kompendium (Name + Dokumenttyp)
+   sie stammt. Existiert das Kompendium auf der Ziel-Installation noch nicht,
+   wird es **automatisch neu angelegt**.
+5. **Ordner innerhalb des Kompendiums** (die du z. B. per Rechtsklick direkt im
+   Kompendium anlegst) werden mitexportiert und beim Import an gleicher Stelle
+   wiederhergestellt.
+
+Die gleichen Optionen wie bei normalen Objekten gelten auch hier: Assets werden
+mitgesichert, der Delta-Status (Neu/Geändert/Unverändert) wird ebenso ermittelt,
+und „Unveränderte ausblenden" funktioniert identisch. Ein **Seitenleisten-Ordner**
+gibt es bei Kompendium-Einträgen naturgemäß nicht – die Ordner-Verhalten-Einstellung
+(„Gleicher Ordner/Kein Ordner/Fester Ordner") greift hier daher nicht.
+
+> **Kompendien automatisch aus vielen kleinen Exporten bauen:** Wenn du Items,
+> Charaktere, Szenen usw. einzeln in ein separates Inhalte-Repo exportierst und
+> daraus regelmäßig ein fertiges, installierbares Kompendium-Modul erzeugen
+> willst, wirf einen Blick auf das mitgelieferte CI-Werkzeug
+> **[`compendium-builder/`](compendium-builder/README.md)** – es baut per
+> GitHub Actions automatisch (z. B. täglich) aus allen Exporten ein Kompendium.
+
+---
+
 ## Wenn etwas nicht klappt (Problemlösung)
 
 - **„GitHub 401" / „GitHub 403":** Der Token fehlt, ist abgelaufen oder hat nicht
@@ -222,6 +271,10 @@ Nachladen ist nicht nötig.
   Token hat keinen Zugriff auf genau dieses Repo.
 - **Nichts zu importieren:** Es wurde für diesen Typ noch nichts exportiert, oder der
   **GitHub-Branch** in den Einstellungen stimmt nicht (Standard: `main`).
+- **„No world compendiums found" / „Keine Welt-Kompendien gefunden":** Es existieren
+  in dieser Welt aktuell keine **eigenen** Kompendien – lege zuerst eines im
+  Kompendium-Reiter an (System-/Modul-Kompendien werden bewusst nicht angeboten,
+  siehe [Kompendien sichern und wiederherstellen](#kompendien-sichern-und-wiederherstellen)).
 
 ---
 
@@ -241,3 +294,23 @@ Nachladen ist nicht nötig.
   Exportieren/Importieren **nicht** heruntergefahren werden.
 - **Alles-in-einer-Datei:** Charaktere nehmen ihre Items/Effekte mit, Journale ihre
   Seiten, Szenen ihre Tokens/Notizen/Lichter – jeweils in einer einzigen Datei.
+
+---
+
+## Kompatibilität
+
+- **Getestet:** FoundryVTT **v12**. Alle in dieser Anleitung beschriebenen
+  Abläufe (Buttons, Dialoge, Export/Import, Kompendien) sind darauf ausgelegt
+  und wurden damit geprüft.
+- **v13:** Foundry v13 hat die internen „Hooks" für Rechtsklick-Menüs in der
+  Seitenleiste umbenannt und liefert an Callback-Funktionen kein jQuery-Objekt
+  mehr, sondern ein natives HTML-Element. Das Modul registriert daher **beide**
+  Varianten (v12- **und** v13-Hook-Namen) und erkennt beide Übergabeformen
+  automatisch – dadurch sollte das Rechtsklick-Menü „Export nach Git" auch unter
+  v13 erscheinen. Die Buttons oben in den Seitenleisten sowie alle Dialoge sind
+  von dieser Änderung ohnehin nicht betroffen. `module.json` erlaubt entsprechend
+  `"maximum": "13"` – ein vollständiger End-to-End-Test auf einer echten v13-Welt
+  durch den Modul-Autor steht aber noch aus, daher gilt v13 als **kompatibel,
+  aber nicht vollständig verifiziert**.
+- **Rückmeldung willkommen:** Falls dir auf v13 (oder einer neueren Version)
+  etwas auffällt, melde es gerne als Issue im Repository.
