@@ -324,3 +324,9 @@ gibt es bei Kompendium-Einträgen naturgemäß nicht – die Ordner-Verhalten-Ei
   aber nicht vollständig verifiziert**.
 - **Rückmeldung willkommen:** Falls dir auf v13 (oder einer neueren Version)
   etwas auffällt, melde es gerne als Issue im Repository.
+
+## Hinweis zur KI-Unterstützung
+
+Bei der Entwicklung dieses Projekts wurden KI-Tools zur Codeerstellung und
+-überarbeitung eingesetzt. Die Änderungen werden vom Maintainer geprüft; die
+Verantwortung für den Code und seine Pflege liegt beim Maintainer.
