@@ -334,3 +334,9 @@ folder/Fixed folder") therefore doesn't apply here.
   fully verified**.
 - **Feedback welcome:** if you notice anything on v13 (or a newer version),
   please file it as an issue in the repository.
+
+## AI assistance
+
+AI tools were used to generate and revise code during the development of this
+project. The maintainer reviews changes and is responsible for the code and
+its maintenance.
