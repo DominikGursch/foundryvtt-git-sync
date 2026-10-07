@@ -1,4 +1,4 @@
-# Foundry Git Sync (FoundryVTT v12 / v13)
+# Foundry Git Sync (FoundryVTT v12)
 
 🇬🇧 English (this file) · 🇩🇪 [Deutsch](README.md)
 
@@ -32,9 +32,8 @@ the Foundry interface**, with no server and no terminal required.
 ### What you need
 
 - A **FoundryVTT v12** installation (you, as **Game Master/GM**). The module
-  targets v12; the automated tests do not cover Foundry integration.
-  Context menus and buttons are also intended to support **v13** (see
-  [Compatibility](#compatibility)).
+  is currently released and tested for v12 only; the automated tests do not
+  cover Foundry integration (see [Compatibility](#compatibility)).
 - A free **GitHub account**.
 
 **Quick start:**
@@ -322,18 +321,17 @@ folder/Fixed folder") therefore doesn't apply here.
   (`node --test compendium-builder/test.mjs`), not the Foundry integration.
   Buttons, dialogs, and export/import workflows should therefore be tested
   separately in a Foundry instance.
-- **v13:** Foundry v13 renamed the internal "hooks" for sidebar right-click
-  menus, and no longer passes a jQuery object to callback functions but a
-  native HTML element instead. The module therefore registers **both**
-  variants (v12 **and** v13 hook names) and automatically detects both
-  argument shapes – so the "Export to Git" context-menu entry should also
-  appear on v13. The buttons at the top of the sidebars and all dialogs are
-  unaffected by this change either way. `module.json` accordingly allows
-  `"maximum": "13"` – a full end-to-end test on a real v13 world by the
-  module author is still pending, so v13 is considered **compatible, but not
-  fully verified**.
-- **Feedback welcome:** if you notice anything on v13 (or a newer version),
-  please file it as an issue in the repository.
+- **Supported version:** `module.json` sets `minimum`, `verified`, and
+  `maximum` to **12**. The module is currently **tested on Foundry v12 only**
+  and can only be installed and enabled there.
+- **v13 (not yet supported):** Foundry v13 renamed the internal "hooks" for
+  sidebar right-click menus, and passes a native HTML element instead of a
+  jQuery object to callback functions. As a precaution, the code registers
+  **both** variants (v12 **and** v13 hook names) and automatically detects
+  both argument shapes. Until a full test on a real v13 world has been done,
+  however, v13 remains excluded in `module.json`.
+- **Feedback welcome:** if you notice anything, please file it as an issue in
+  the repository.
 
 ### Importing across versions
 
