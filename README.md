@@ -325,6 +325,31 @@ gibt es bei Kompendium-Einträgen naturgemäß nicht – die Ordner-Verhalten-Ei
 - **Rückmeldung willkommen:** Falls dir auf v13 (oder einer neueren Version)
   etwas auffällt, melde es gerne als Issue im Repository.
 
+### Import zwischen verschiedenen Versionen
+
+Ein Export ist **nicht versionsunabhängig**. Er enthält die Rohdaten im Format
+der exportierenden Installation sowie deren Versionsangaben (`_stats`:
+Foundry-Version, System und Systemversion). Vor jedem Import vergleicht das
+Modul diese Angaben mit der eigenen Installation und zeigt im Import-Dialog ein
+Badge an (Tooltip mit Details):
+
+| Situation | Verhalten |
+|---|---|
+| Gleiche Foundry-Generation und Systemversion | Normaler Import |
+| Ältere Foundry-Generation (z. B. v12 → v13) oder ältere Systemversion | Badge **„Andere Version"**. Nach Bestätigung inklusive Backup-Hinweis werden die Daten über Foundrys eigene Migration (`migrateDataSafe`) an das aktuelle Schema angepasst |
+| Neuere Systemversion, nur Patch-Unterschied (z. B. 4.1.2 → 4.1.0) | Badge **„Andere Version"**, Import nach Bestätigung |
+| Keine Versionsangaben in der Datei | Badge **„Version unbekannt"**, Import nach Bestätigung |
+| Neuere Foundry-Generation (z. B. v13 → v12) oder neuere System-Haupt-/Nebenversion | Badge **„Inkompatibel"**, Import wird **blockiert** (eine Rückkonvertierung gibt es in Foundry nicht) |
+| Actor/Item aus einem anderen System (z. B. pf2e → dnd5e) | **Blockiert** |
+| Szene/Journal aus einem anderen System | Badge **„Andere Version"**, Import nach Bestätigung |
+
+**Grenzen:** Die automatische Migration deckt das Foundry-Kernschema und die
+`migrateData`-Logik der Datenmodelle des Systems ab. **Welt-Migrationsskripte
+eines Systems** (die z. B. nach einem dnd5e-Update einmalig laufen) werden beim
+Import nicht ausgeführt. Lege deshalb vor einem versionsübergreifenden Import
+immer ein **Backup der Welt** an. Bei gemeinsam genutzten Repos ist es am
+sichersten, wenn alle Welten dieselbe Foundry- und Systemversion verwenden.
+
 ## Hinweis zur KI-Unterstützung
 
 Bei der Entwicklung dieses Projekts wurden KI-Tools zur Codeerstellung und

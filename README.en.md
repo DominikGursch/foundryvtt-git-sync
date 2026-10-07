@@ -335,6 +335,31 @@ folder/Fixed folder") therefore doesn't apply here.
 - **Feedback welcome:** if you notice anything on v13 (or a newer version),
   please file it as an issue in the repository.
 
+### Importing across versions
+
+An export is **not version-agnostic**. It contains the raw data in the format of
+the exporting installation plus its version metadata (`_stats`: Foundry
+version, system, and system version). Before every import, the module compares
+this metadata with the local installation and shows a badge in the import
+dialog (hover for details):
+
+| Situation | Behavior |
+|---|---|
+| Same Foundry generation and system version | Normal import |
+| Older Foundry generation (e.g. v12 → v13) or older system version | **"Other version"** badge; after a confirmation that includes a backup hint, Foundry's own migration (`migrateDataSafe`) adapts the data to the current schema |
+| Newer system version, patch difference only (e.g. 4.1.2 → 4.1.0) | **"Other version"** badge; imported after confirmation |
+| No version metadata in the file | **"Version unknown"** badge; imported after confirmation |
+| Newer Foundry generation (e.g. v13 → v12) or newer system major/minor version | **"Incompatible"** badge; the import is **blocked** (Foundry has no backward migration) |
+| Actor/Item from a different system (e.g. pf2e → dnd5e) | **Blocked** |
+| Scene/Journal from a different system | **"Other version"** badge; imported after confirmation |
+
+**Limitations:** The automatic migration covers the Foundry core schema and the
+`migrateData` logic of the system's data models. **A system's world migration
+scripts** (for example, the one-time migration that runs after a dnd5e update)
+are not executed on import. Always **back up your world** before importing
+across versions. For shared repositories, it is safest if all worlds use the
+same Foundry and system version.
+
 ## AI assistance
 
 AI tools were used to generate and revise code during the development of this
