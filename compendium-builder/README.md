@@ -5,7 +5,7 @@
 > **Wichtig:** Dieser Ordner gehört **nicht** zum FoundryVTT-Modul selbst
 > (`git-object-sync/`). Er ist ein eigenständiges Node.js-Werkzeug, das du in
 > dein **anderes, privates Inhalte-Repo** kopierst – also genau das Repo, in
-> das das Modul „Git Object Sync" exportiert (`actors/`, `items/`, `scenes/`,
+> das das Modul „Foundry Git Sync" exportiert (`actors/`, `items/`, `scenes/`,
 > `journal/`, `compendia/<pack>/`).
 
 ## Schnellstart (für Eilige)
@@ -25,7 +25,7 @@
 
 ## Was macht das?
 
-Git Object Sync exportiert jedes Objekt als einzelne, flache JSON-Datei. Das
+Foundry Git Sync exportiert jedes Objekt als einzelne, flache JSON-Datei. Das
 ist ideal für Git (kleine, diff-bare Commits), aber kein direkt in Foundry
 installierbares Kompendium. Dieses Skript schließt die Lücke:
 
@@ -36,7 +36,7 @@ installierbares Kompendium. Dieses Skript schließt die Lücke:
 3. Es legt/aktualisiert ein `module.json`, damit dein Inhalte-Repo selbst als
    **installierbares Foundry-Modul** genutzt werden kann – mit echten,
    durchsuchbaren, browsbaren Kompendien, ganz ohne den manuellen
-   Kompendium-Import-Dialog von Git Object Sync.
+   Kompendium-Import-Dialog von Foundry Git Sync.
 4. Über eine GitHub-Actions-Automatisierung läuft das **zyklisch** (Cron)
    und/oder bei jedem Export-Push – dein Kompendium-Modul bleibt so immer
    aktuell.
@@ -49,17 +49,17 @@ installierbares Kompendium. Dieses Skript schließt die Lücke:
   Export-Ordner ein eigenes Pack** (`packs/actors`, `packs/items`,
   `packs/scenes`, `packs/journal`, plus ein Pack je eigenem Kompendium unter
   `compendia/<pack>`) – alle in einem Lauf, aber als separate Packs.
-- **Ordner-Struktur wird wiederhergestellt.** Die von Git Object Sync
+- **Ordner-Struktur wird wiederhergestellt.** Die von Foundry Git Sync
   mitgelieferten Ordner-Pfade (`flags.git-object-sync.folderPath` bzw.
   `flags.git-object-sync.compendium.folderPath`) werden in echte,
   pack-interne Ordner-Dokumente umgewandelt (siehe `lib.mjs`). Die Ordner-IDs
   werden **deterministisch** aus Pack-Name + Namenspfad abgeleitet, sodass
   wiederholte Läufe (Cron) keine doppelten Ordner erzeugen.
-- **Privates Repo bleibt privat.** Foundrys komfortable Manifest-URL-
-  Installation funktioniert nur bei öffentlichen Repos (Foundry lädt sie ohne
-  Anmeldung). Bei einem privaten Repo bleibt nur die **manuelle Installation**
-  (ZIP herunterladen, Ordner nach `Data/modules/` kopieren) – siehe unten,
-  genau wie bereits für `git-object-sync/` selbst im Haupt-README beschrieben.
+- **Das Inhalte-Repo bleibt privat.** Foundrys Manifest-URL-Installation
+  funktioniert nur bei öffentlichen Repos (Foundry lädt sie ohne Anmeldung).
+  Für das private Inhalte-Repo bleibt daher nur die **manuelle Installation**
+  (ZIP herunterladen, Ordner nach `Data/modules/` kopieren) – anders als beim
+  öffentlichen Foundry-Git-Sync-Modul.
 - **Nur die Zuordnungslogik ist eigener Code.** Das eigentliche Packen in eine
   LevelDB übernimmt vollständig das offizielle, von Foundry selbst gepflegte
   `@foundryvtt/foundryvtt-cli`. `lib.mjs` enthält nur die reine
@@ -92,7 +92,7 @@ Kopiere `example-workflow.yml` nach `.github/workflows/build-packs.yml` in
 deinem **privaten Inhalte-Repo** (nicht in dieses Modul-Repo!). Der Workflow:
 
 - läuft **täglich per Cron** sowie **bei jedem Push** (also direkt nach einem
-  Export durch Git Object Sync),
+  Export durch Foundry Git Sync),
 - installiert Node + die Abhängigkeiten,
 - baut alle Packs neu,
 - committed `packs/` und `module.json` automatisch zurück ins selbe Repo

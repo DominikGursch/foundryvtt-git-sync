@@ -1,0 +1,85 @@
+name: Release Foundry module
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "git-object-sync/**"
+  workflow_dispatch:
+
+concurrency:
+  group: release-foundry-module-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the latest main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Increment patch version and prepare manifest
+        id: version
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const manifestPath = "git-object-sync/module.json";
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(manifest.version);
+          if (!match) {
+            throw new Error(`Expected a stable x.y.z version, got: ${manifest.version}`);
+          }
+          const version = `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
+          const tag = `v${version}`;
+          const repository = process.env.GITHUB_REPOSITORY;
+          manifest.version = version;
+          manifest.download = `https://github.com/${repository}/releases/download/${tag}/module.zip`;
+          fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ntag=${tag}\n`);
+          NODE
+
+      - name: Ensure release tag is unused
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git show-ref --verify --quiet "refs/tags/${TAG}"; then
+            echo "Release tag ${TAG} already exists." >&2
+            exit 1
+          fi
+
+      - name: Package module
+        run: |
+          cd git-object-sync
+          zip -qr "$GITHUB_WORKSPACE/module.zip" module.json scripts styles lang
+
+      - name: Commit version and create release tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add git-object-sync/module.json
+          git commit -m "chore(release): ${TAG}"
+          git tag -a "$TAG" -m "Foundry Git Sync ${VERSION}"
+          git push origin HEAD:main "refs/tags/${TAG}"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$TAG" \
+            module.zip \
+            git-object-sync/module.json \
+            --title "Foundry Git Sync ${TAG}" \
+            --generate-notes

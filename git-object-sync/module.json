@@ -1,7 +1,7 @@
 {
   "id": "git-object-sync",
-  "title": "Git Object Sync",
-  "description": "Export und Import einzelner Dokumente (Actors, Items, Szenen, Journal) sowie eigener Welt-Kompendien inkl. Bilder/Maps – direkt zu GitHub. Auswahl per Rechtsklick oder Checkbox-Dialog, inkl. Delta-Anzeige (neu/geändert/unverändert).",
+  "title": "Foundry Git Sync",
+  "description": "Export and import Foundry documents and your own world compendiums, including images and maps, directly to GitHub. Select entries by right-click or in a checkbox dialog with delta status.",
   "version": "1.7.1",
   "compatibility": {
     "minimum": "12",

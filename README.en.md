@@ -1,4 +1,4 @@
-# Git Object Sync (FoundryVTT v12 / v13)
+# Foundry Git Sync (FoundryVTT v12 / v13)
 
 🇬🇧 English (this file) · 🇩🇪 [Deutsch](README.md)
 
@@ -31,9 +31,10 @@ the Foundry interface**, with no server and no terminal required.
 
 ### What you need
 
-- A **FoundryVTT v12** installation (you, as **Game Master/GM**). The
-  context menus and buttons also work on **v13**; only v12 has been
-  thoroughly tested so far (see [Compatibility](#compatibility)).
+- A **FoundryVTT v12** installation (you, as **Game Master/GM**). The module
+  targets v12; the automated tests do not cover Foundry integration.
+  Context menus and buttons are also intended to support **v13** (see
+  [Compatibility](#compatibility)).
 - A free **GitHub account**.
 
 **Quick start:**
@@ -58,12 +59,11 @@ compendium-builder/         <- Optional CI tool for your PRIVATE content repo
 
 ## 1. Install the module
 
-This step brings the module into your Foundry installation. Since your
-module repo is **private**, the **manual installation (method 1)** is the
-right approach. The convenient manifest-URL installation (method 2) only
-works with a **public** repo.
+This step brings the module into your Foundry installation. The module
+repository is public, so you can install and update it directly through the
+manifest URL in Foundry (method 2).
 
-### Method 1 – Manual (copy the folder, for a private repo)
+### Method 1 – Manual (copy the folder)
 
 1. Open the project on GitHub (while signed in):
    `https://github.com/DominikGursch/foundryvtt-git-sync`
@@ -81,13 +81,17 @@ Foundry on the setup screen under **Configuration** → "User Data Path".
 
 > **Updating later:** to update, simply repeat the ZIP download and copy the
 > `git-object-sync/` folder into `Data/modules/` again (replacing the
-> existing one).
+> existing one). Stop Foundry first and replace the entire existing module
+> folder with the new one. Keep the folder name `git-object-sync`; it is the
+> module's technical ID. Then restart Foundry. World settings are stored in
+> Foundry's database, not in the module folder, so they are preserved.
 
-### Method 2 – Via the Foundry interface (manifest URL, public repo only)
+### Method 2 – Via the Foundry interface (recommended)
 
-> **Only possible if the module repo is public.** Foundry downloads the
-> manifest URL **without authentication**; with a private repo, the download
-> fails. As long as your repo stays private, use **Method 1**.
+The module repository is public, so Foundry can fetch the manifest and ZIP
+without authentication. When module code under `git-object-sync/` changes,
+GitHub Actions automatically creates a release with an incremented patch
+version.
 
 1. Start Foundry and stay on the **setup/start screen** (not inside a world).
 2. Switch to the **"Add-on Modules"** tab.
@@ -96,11 +100,13 @@ Foundry on the setup screen under **Configuration** → "User Data Path".
    ```
    https://github.com/DominikGursch/foundryvtt-git-sync/releases/latest/download/module.json
    ```
+   The manifest version and the download link to the matching ZIP are updated
+   automatically for each release.
 
 ### Enable the module (both methods)
 
 **Enable:** start your world in Foundry and go to
-**Game Settings → Manage Modules**. Check the box for **"Git Object Sync"**
+**Game Settings → Manage Modules**. Check the box for **"Foundry Git Sync"**
 and save. The actual setup continues in **[Set up GitHub](#2-set-up-github)**.
 
 ---
@@ -123,7 +129,7 @@ repo** – nothing more.
 
 1. Open **https://github.com/settings/personal-access-tokens** →
    **Generate new token** (Fine-grained).
-2. **Token name:** e.g. `Foundry Git Object Sync`. **Expiration:** as you
+2. **Token name:** e.g. `Foundry Git Sync`. **Expiration:** as you
    prefer.
 3. **Repository access** → **Only select repositories** → choose your repo.
 4. **Permissions** → **Repository permissions** → set **Contents** to
@@ -133,7 +139,7 @@ repo** – nothing more.
 
 ### 2.3 – Configure the module
 
-In Foundry: **Settings → Module Settings → "Git Object Sync"**:
+In Foundry: **Settings → Module Settings → "Foundry Git Sync"**:
 
 - **GitHub repository:** `YOUR_GITHUB_NAME/REPO_NAME` (e.g.
   `DominikGursch/foundry-content`)
@@ -247,9 +253,11 @@ that installation and doesn't need a separate backup.
 3. **Export:** select the entries you want (across multiple compendiums is
    fine) and export them. They land in the repo under
    `compendia/<technical-name>/…`.
-4. **Import:** the file remembers which compendium (name + document type) it
-   came from. If that compendium doesn't exist yet on the target
-   installation, it is **created automatically**.
+4. **Import:** the export stores the compendium's technical collection ID and
+   document type. This keeps compendiums with the same display name separate.
+   If the matching compendium doesn't exist on the target installation yet,
+   it is **created automatically**. Older exports without a collection ID are
+   matched by display name and document type.
 5. **Folders inside the compendium** (the ones you create e.g. via
    right-click directly inside the compendium) are exported and restored to
    the same place on import.
@@ -309,9 +317,11 @@ folder/Fixed folder") therefore doesn't apply here.
 
 ## Compatibility
 
-- **Tested:** FoundryVTT **v12**. All workflows described in this guide
-  (buttons, dialogs, export/import, compendiums) are designed for and
-  verified on it.
+- **Target version:** FoundryVTT **v12**. The automated tests in this
+  repository cover the pure mapping logic of the optional `compendium-builder`
+  (`node --test compendium-builder/test.mjs`), not the Foundry integration.
+  Buttons, dialogs, and export/import workflows should therefore be tested
+  separately in a Foundry instance.
 - **v13:** Foundry v13 renamed the internal "hooks" for sidebar right-click
   menus, and no longer passes a jQuery object to callback functions but a
   native HTML element instead. The module therefore registers **both**

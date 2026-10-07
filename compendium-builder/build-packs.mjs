@@ -1,38 +1,37 @@
 #!/usr/bin/env node
 /**
- * Git Object Sync – Compendium Builder
+ * Foundry Git Sync – Compendium Builder
  * -------------------------------------------------------------------------
- * CI-Hilfswerkzeug für das PRIVATE Inhalte-Repo (das andere Repo, in das das
- * Foundry-Modul "Git Object Sync" exportiert – NICHT dieses Modul-Repo hier).
+ * CI helper tool for the PRIVATE content repository (the other repository
+ * exported to by the "Foundry Git Sync" Foundry module, NOT this module repo).
  *
- * Baut aus den flach exportierten JSON-Dateien
+ * Build installable FoundryVTT compendiums from the flat JSON exports
  *   actors/*.json, items/*.json, scenes/*.json, journal/*.json,
  *   compendia/<pack.collection>/*.json
- * echte, installierbare FoundryVTT-Kompendien (LevelDB-Packs unter packs/<name>)
- * und schreibt/aktualisiert ein module.json, damit das Repo selbst als
- * Foundry-Modul installiert/aktualisiert werden kann (kein manueller Import
- * über den Git-Object-Sync-Dialog mehr nötig).
+ * (LevelDB packs under packs/<name>) and create/update module.json so the
+ * repository itself can be installed as a Foundry module. No manual import
+ * through the Foundry Git Sync dialog is needed.
  *
- * Wichtige Hintergründe (siehe README.md in diesem Ordner für Details):
- * - Ein Kompendium enthält immer nur EINEN Dokumenttyp. "Alle Komponenten in
- *   ein Kompendium" gibt es technisch nicht – dieses Skript baut daher pro
- *   Quell-Ordner/-Kompendium ein eigenes Pack (mehrere Packs pro Lauf).
- * - compilePack() aus @foundryvtt/foundryvtt-cli kümmert sich NICHT selbst um
- *   Ordner-Hierarchien – es schreibt jede Datei anhand ihres eigenen `_key`-
- *   Felds ("!<collection>!<id>") in die LevelDB, Ordner sind einfach weitere
- *   Dokumente mit `_key: "!folders!<id>"`. Dieses Skript synthetisiert daher
- *   aus dem von Git Object Sync mitgelieferten `folderPath`-Flag passende
- *   Folder-Dokumente und verknüpft die Inhalts-Dokumente per `data.folder`
- *   (siehe lib.mjs: resolveFolderPath/reshapeDocument).
- * - Damit wiederholte Läufe (Cron) keine doppelten Ordner anlegen, werden
- *   Ordner-IDs deterministisch aus (Pack-Name + Namenspfad) abgeleitet
- *   (siehe lib.mjs: stableId()) – derselbe Pfad ergibt immer dieselbe ID.
+ * Important background (see README.md in this directory for details):
+ * - A compendium contains only ONE document type. Mixed compendiums are not
+ *   supported, so this script builds a separate pack for each source
+ *   directory/compendium (multiple packs per run).
+ * - compilePack() from @foundryvtt/foundryvtt-cli does NOT create folder
+ *   hierarchies. It writes each file to LevelDB using its `_key` field
+ *   ("!<collection>!<id>"); folders are additional documents with
+ *   `_key: "!folders!<id>"`. This script therefore synthesizes Folder
+ *   documents from the `folderPath` flag supplied by Foundry Git Sync and links
+ *   content documents through `data.folder` (see resolveFolderPath/reshapeDocument
+ *   in lib.mjs).
+ * - To prevent duplicate folders on repeated (cron) runs, folder IDs are
+ *   derived deterministically from the pack name and name path (see stableId()
+ *   in lib.mjs), so the same path always has the same ID.
  *
- * Nutzung (im Wurzelverzeichnis des privaten Inhalte-Repos):
+ * Usage (from the root of the private content repository):
  *   npm install
  *   node build-packs.mjs
  *
- * Siehe README.md für die empfohlene GitHub-Actions-Automatisierung.
+ * See README.md for the recommended GitHub Actions automation.
  */
 
 import fs from "node:fs";
@@ -52,7 +51,7 @@ async function buildGroup(group, { repoRoot, stagingRoot, outRoot, log }) {
   fs.rmSync(stagingDir, { recursive: true, force: true });
   fs.mkdirSync(stagingDir, { recursive: true });
 
-  const seenFolders = new Map(); // "<packName>::<Pfad>" -> Folder-ID, verhindert doppelte Ordner
+  const seenFolders = new Map(); // "<packName>::<path>" -> folder ID; prevents duplicate folders
   const writtenFolderIds = new Set();
   let docCount = 0;
 
@@ -89,12 +88,11 @@ function writeModuleManifest(repoRoot, packs, log) {
 }
 
 async function main() {
-  // Wurzelverzeichnis des Inhalte-Repos IMMER relativ zum Speicherort dieses
-  // Skripts bestimmen (nicht relativ zum aktuellen Arbeitsverzeichnis). So
-  // funktioniert der Aufruf unabhängig davon, ob man `npm run build` bzw.
-  // `node build-packs.mjs` aus dem Ordner "compendium-builder/" heraus oder
-  // `node compendium-builder/build-packs.mjs` aus der Repo-Wurzel ausführt -
-  // beides ist in der Praxis üblich und soll ohne Stolperfallen funktionieren.
+  // Always resolve the content repository root relative to this script's
+  // location, not the current working directory. This lets the script work
+  // whether `npm run build` or `node build-packs.mjs` is run from
+  // "compendium-builder/", or `node compendium-builder/build-packs.mjs` is run
+  // from the repository root.
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const repoRoot = path.dirname(scriptDir);
   const stagingRoot = path.join(scriptDir, ".pack-build");
@@ -129,7 +127,7 @@ async function main() {
   }
 }
 
-// Nur ausführen, wenn direkt aufgerufen (nicht beim Import in Tests).
+// Run only when invoked directly, not when imported by tests.
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   main().catch((err) => {

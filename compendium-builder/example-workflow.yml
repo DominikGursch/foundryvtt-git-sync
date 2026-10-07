@@ -1,8 +1,8 @@
-# Vorlage für das PRIVATE Inhalte-Repo (nicht für dieses Modul-Repo!)
+# Template for the PRIVATE content repository (not this module repository).
 #
-# Diese Datei nach `.github/workflows/build-packs.yml` in deinem privaten
-# Git-Object-Sync-Inhalte-Repo kopieren. Baut zyklisch (Cron) sowie bei jedem
-# Push die Kompendien neu und committed sie zurück in dasselbe Repo.
+# Copy this file to `.github/workflows/build-packs.yml` in your private
+# Foundry Git Sync content repository. Rebuilds compendiums on a schedule (cron)
+# and on every push, then commits them back to the same repository.
 
 name: Build Compendium Packs
 
@@ -10,18 +10,18 @@ on:
   push:
     branches: [main]
   schedule:
-    # Täglich um 03:15 UTC – Uhrzeit/Frequenz nach Bedarf anpassen.
+    # Daily at 03:15 UTC; adjust the time/frequency as needed.
     - cron: "15 3 * * *"
-  workflow_dispatch: {} # erlaubt manuelles Auslösen über die Actions-Oberfläche
+  workflow_dispatch: {} # Allow manual runs from the Actions UI.
 
 permissions:
-  contents: write # nötig, damit der Workflow packs/ + module.json zurückcommitten darf
+  contents: write # Required to commit packs/ and module.json back to the repository.
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Repo auschecken
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Node.js einrichten
@@ -33,14 +33,14 @@ jobs:
         working-directory: compendium-builder
         run: npm install
 
-      - name: Kompendien bauen
+      - name: Build compendiums
         working-directory: .
         run: node compendium-builder/build-packs.mjs
 
-      - name: Änderungen committen (falls vorhanden)
+      - name: Commit changes (if any)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add packs module.json
-          git diff --cached --quiet || git commit -m "Kompendien neu gebaut"
+          git diff --cached --quiet || git commit -m "Rebuild compendiums"
           git push
