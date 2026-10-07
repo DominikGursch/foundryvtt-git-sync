@@ -1,4 +1,4 @@
-# Foundry Git Sync (FoundryVTT v12 / v13)
+# Foundry Git Sync (FoundryVTT v12)
 
 🇩🇪 Deutsch (diese Datei) · 🇬🇧 [English](README.en.md)
 
@@ -32,9 +32,8 @@ Items, Szenen, Journale und eigene Welt-Kompendien** – inklusive ihrer
 ### Was du brauchst
 
 - Eine **FoundryVTT v12**-Installation (du als **Spielleiter/GM**). Das Modul
-  ist für v12 ausgelegt; die automatisierten Tests prüfen nicht die Foundry-
-  Integration. Kontextmenüs und Buttons sind auch für **v13** vorgesehen
-  (siehe [Kompatibilität](#kompatibilität)).
+  ist aktuell nur für v12 freigegeben und getestet; die automatisierten Tests
+  prüfen nicht die Foundry-Integration (siehe [Kompatibilität](#kompatibilität)).
 - Ein kostenloses **GitHub-Konto**.
 
 **Schnellstart:**
@@ -312,18 +311,18 @@ gibt es bei Kompendium-Einträgen naturgemäß nicht – die Ordner-Verhalten-Ei
   (`node --test compendium-builder/test.mjs`), nicht die Foundry-Integration.
   Buttons, Dialoge sowie Export/Import sollten daher in einer Foundry-Instanz
   separat geprüft werden.
-- **v13:** Foundry v13 hat die internen „Hooks" für Rechtsklick-Menüs in der
-  Seitenleiste umbenannt und liefert an Callback-Funktionen kein jQuery-Objekt
-  mehr, sondern ein natives HTML-Element. Das Modul registriert daher **beide**
-  Varianten (v12- **und** v13-Hook-Namen) und erkennt beide Übergabeformen
-  automatisch – dadurch sollte das Rechtsklick-Menü „Export nach Git" auch unter
-  v13 erscheinen. Die Buttons oben in den Seitenleisten sowie alle Dialoge sind
-  von dieser Änderung ohnehin nicht betroffen. `module.json` erlaubt entsprechend
-  `"maximum": "13"` – ein vollständiger End-to-End-Test auf einer echten v13-Welt
-  durch den Modul-Autor steht aber noch aus, daher gilt v13 als **kompatibel,
-  aber nicht vollständig verifiziert**.
-- **Rückmeldung willkommen:** Falls dir auf v13 (oder einer neueren Version)
-  etwas auffällt, melde es gerne als Issue im Repository.
+- **Freigegebene Version:** `module.json` setzt `minimum`, `verified` und
+  `maximum` auf **12**. Das Modul ist aktuell **nur auf Foundry v12 getestet**
+  und lässt sich auch nur dort installieren und aktivieren.
+- **v13 (noch nicht freigegeben):** Foundry v13 hat die internen „Hooks" für
+  Rechtsklick-Menüs in der Seitenleiste umbenannt und liefert an
+  Callback-Funktionen kein jQuery-Objekt mehr, sondern ein natives HTML-Element.
+  Der Code registriert vorsorglich **beide** Varianten (v12- **und**
+  v13-Hook-Namen) und erkennt beide Übergabeformen automatisch. Solange kein
+  vollständiger Test auf einer echten v13-Welt erfolgt ist, bleibt v13 in
+  `module.json` aber ausgeschlossen.
+- **Rückmeldung willkommen:** Falls dir etwas auffällt, melde es gerne als
+  Issue im Repository.
 
 ### Import zwischen verschiedenen Versionen
 
