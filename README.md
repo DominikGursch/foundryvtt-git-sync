@@ -338,10 +338,10 @@ Badge an (Tooltip mit Details):
 | Gleiche Foundry-Generation und Systemversion | Normaler Import |
 | Ältere Foundry-Generation (z. B. v12 → v13) oder ältere Systemversion | Badge **„Andere Version"**. Nach Bestätigung inklusive Backup-Hinweis werden die Daten über Foundrys eigene Migration (`migrateDataSafe`) an das aktuelle Schema angepasst |
 | Neuere Systemversion, nur Patch-Unterschied (z. B. 4.1.2 → 4.1.0) | Badge **„Andere Version"**, Import nach Bestätigung |
-| Keine Versionsangaben in der Datei | Badge **„Version unbekannt"**, Import nach Bestätigung |
+| Gleiches System, aber keine Foundry-Versionsangabe | Badge **„Version unbekannt"**, Import nach Bestätigung |
 | Neuere Foundry-Generation (z. B. v13 → v12) oder neuere System-Haupt-/Nebenversion | Badge **„Inkompatibel"**, Import wird **blockiert** (eine Rückkonvertierung gibt es in Foundry nicht) |
-| Actor/Item aus einem anderen System (z. B. pf2e → dnd5e) | **Blockiert** |
-| Szene/Journal aus einem anderen System | Badge **„Andere Version"**, Import nach Bestätigung |
+| Objekt aus einem **anderen System** (z. B. dnd5e → Cyberpunk RED), egal ob Actor, Item, Szene oder Journal | **Blockiert** – es lassen sich nur Objekte aus demselben System importieren |
+| Datei ohne System-Angabe (`_stats.systemId`) | **Blockiert**, da die Herkunft nicht prüfbar ist |
 
 **Grenzen:** Die automatische Migration deckt das Foundry-Kernschema und die
 `migrateData`-Logik der Datenmodelle des Systems ab. **Welt-Migrationsskripte

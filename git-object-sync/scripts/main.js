@@ -674,10 +674,11 @@ async function restoreAssetsGithub(data, tree, prefix = "") {
 /*  migrate older data forward (`migrateDataSafe`), but there is no backward  */
 /*  migration, and data from another game system does not fit the local      */
 /*  system schema. Imports are therefore checked before anything is written. */
+/*  Only data from the same game system is accepted, for all document types: */
+/*  even Scenes and Journals embed system data (token actor deltas, links,   */
+/*  system-specific flags). Data without a system ID cannot be verified and  */
+/*  is blocked as well.                                                       */
 /* -------------------------------------------------------------------------- */
-
-/** Document types whose `system` data depends on the active game system. */
-const SYSTEM_DATA_TYPES = new Set(["Actor", "Item"]);
 
 /** Shorten a version string to its first `parts` dot-separated components. */
 function versionPrefix(version, parts) {
@@ -687,13 +688,13 @@ function versionPrefix(version, parts) {
 /**
  * Compare the `_stats` metadata of exported data with this installation.
  * Returns `{ level, reasons }` where `level` is one of:
- * - "blocked": data from a newer Foundry generation, a newer system
- *   major/minor version, or (for Actors/Items) another game system;
- * - "older": data from an older Foundry generation or system version (or,
- *   for Scenes/Journals, another system); Foundry migrates it on import, but
- *   system world-migration scripts do not run;
- * - "unknown": no version metadata available;
- * - "ok": same Foundry generation and system version.
+ * - "blocked": data from another game system, without a system ID, from a
+ *   newer Foundry generation, or from a newer system major/minor version;
+ * - "older": data from an older Foundry generation or system version (or a
+ *   newer system patch release); Foundry migrates it on import, but system
+ *   world-migration scripts do not run;
+ * - "unknown": same system, but no Foundry core version available;
+ * - "ok": same system, Foundry generation, and system version.
  */
 function checkImportCompatibility(type, data) {
   const stats = data?._stats ?? {};
@@ -706,6 +707,10 @@ function checkImportCompatibility(type, data) {
   const localSystemId = game.system.id;
   const localSystemVersion = String(game.system.version ?? "");
 
+  if (!systemId) return { level: "blocked", reasons: [t("GOS.Compat.NoSystem", { target: localSystemId })] };
+  if (systemId !== localSystemId) {
+    return { level: "blocked", reasons: [t("GOS.Compat.OtherSystem", { source: systemId, target: localSystemId })] };
+  }
   if (!coreVersion) return { level: "unknown", reasons: [t("GOS.Compat.Unknown")] };
 
   const blocked = [];
@@ -717,11 +722,7 @@ function checkImportCompatibility(type, data) {
     older.push(t("GOS.Compat.OlderCore", { source: coreVersion, target: game.version }));
   }
 
-  const sameSystem = !systemId || systemId === localSystemId;
-  if (!sameSystem) {
-    const msg = t("GOS.Compat.OtherSystem", { source: systemId, target: localSystemId });
-    (SYSTEM_DATA_TYPES.has(type) ? blocked : older).push(msg);
-  } else if (systemVersion && localSystemVersion) {
+  if (systemVersion && localSystemVersion) {
     const fmt = { source: systemVersion, target: localSystemVersion };
     if (isNewer(versionPrefix(systemVersion, 2), versionPrefix(localSystemVersion, 2))) {
       blocked.push(t("GOS.Compat.NewerSystem", fmt));

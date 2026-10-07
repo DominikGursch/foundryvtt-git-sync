@@ -348,10 +348,10 @@ dialog (hover for details):
 | Same Foundry generation and system version | Normal import |
 | Older Foundry generation (e.g. v12 → v13) or older system version | **"Other version"** badge; after a confirmation that includes a backup hint, Foundry's own migration (`migrateDataSafe`) adapts the data to the current schema |
 | Newer system version, patch difference only (e.g. 4.1.2 → 4.1.0) | **"Other version"** badge; imported after confirmation |
-| No version metadata in the file | **"Version unknown"** badge; imported after confirmation |
+| Same system, but no Foundry version metadata | **"Version unknown"** badge; imported after confirmation |
 | Newer Foundry generation (e.g. v13 → v12) or newer system major/minor version | **"Incompatible"** badge; the import is **blocked** (Foundry has no backward migration) |
-| Actor/Item from a different system (e.g. pf2e → dnd5e) | **Blocked** |
-| Scene/Journal from a different system | **"Other version"** badge; imported after confirmation |
+| Object from a **different system** (e.g. dnd5e → Cyberpunk RED), whether Actor, Item, Scene, or Journal | **Blocked** – only objects from the same system can be imported |
+| File without a system ID (`_stats.systemId`) | **Blocked**, because its origin cannot be verified |
 
 **Limitations:** The automatic migration covers the Foundry core schema and the
 `migrateData` logic of the system's data models. **A system's world migration
