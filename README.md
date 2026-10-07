@@ -1,4 +1,4 @@
-# Git Object Sync (FoundryVTT v12 / v13)
+# Foundry Git Sync (FoundryVTT v12 / v13)
 
 🇩🇪 Deutsch (diese Datei) · 🇬🇧 [English](README.en.md)
 
@@ -31,9 +31,10 @@ Items, Szenen, Journale und eigene Welt-Kompendien** – inklusive ihrer
 
 ### Was du brauchst
 
-- Eine **FoundryVTT v12**-Installation (du als **Spielleiter/GM**). Die
-  Kontextmenüs und Buttons funktionieren auch unter **v13**; ausführlich
-  getestet ist bisher aber nur v12 (siehe [Kompatibilität](#kompatibilität)).
+- Eine **FoundryVTT v12**-Installation (du als **Spielleiter/GM**). Das Modul
+  ist für v12 ausgelegt; die automatisierten Tests prüfen nicht die Foundry-
+  Integration. Kontextmenüs und Buttons sind auch für **v13** vorgesehen
+  (siehe [Kompatibilität](#kompatibilität)).
 - Ein kostenloses **GitHub-Konto**.
 
 **Schnellstart:**
@@ -58,12 +59,11 @@ compendium-builder/         <- Optionales CI-Werkzeug für dein PRIVATES Inhalte
 
 ## 1. Modul installieren
 
-In diesem Schritt bringst du das Modul in deine Foundry-Installation. Da dein
-Modul-Repo **privat** ist, ist die **manuelle Installation (Methode 1)** der richtige
-Weg. Die bequeme Manifest-Installation (Methode 2) funktioniert nur mit einem
-**öffentlichen** Repo.
+In diesem Schritt bringst du das Modul in deine Foundry-Installation. Das
+Modul-Repo ist öffentlich; du kannst es daher direkt über die Manifest-URL in
+Foundry installieren und aktualisieren (Methode 2).
 
-### Methode 1 – Manuell (Ordner kopieren, für privates Repo)
+### Methode 1 – Manuell (Ordner kopieren)
 
 1. Öffne das Projekt auf GitHub (angemeldet):
    `https://github.com/DominikGursch/foundryvtt-git-sync`
@@ -81,12 +81,16 @@ auf der Startseite unter **Configuration** → „User Data Path".
 
 > **Update später:** Zum Aktualisieren einfach den ZIP-Download wiederholen und den
 > Ordner `git-object-sync/` erneut in `Data/modules/` kopieren (vorhandenen ersetzen).
+> Foundry vorher beenden und den vorhandenen Modulordner vollständig durch den
+> neuen ersetzen. Den Ordnernamen `git-object-sync` beibehalten; er ist die
+> technische Modul-ID. Danach Foundry neu starten. Welt-Einstellungen bleiben
+> erhalten, da sie in Foundrys Datenbank und nicht im Modulordner gespeichert sind.
 
-### Methode 2 – Über die Foundry-Oberfläche (Manifest-URL, nur bei öffentlichem Repo)
+### Methode 2 – Über die Foundry-Oberfläche (empfohlen)
 
-> **Nur möglich, wenn das Modul-Repo öffentlich ist.** Foundry lädt die Manifest-URL
-> **ohne Anmeldung**; bei einem privaten Repo schlägt der Download fehl. Solange dein
-> Repo privat bleibt, nutze **Methode 1**.
+Das Modul-Repo ist öffentlich, sodass Foundry Manifest und ZIP ohne Anmeldung
+abrufen kann. Bei Änderungen am Modulcode unter `git-object-sync/` erstellt
+GitHub Actions automatisch ein Release mit einer erhöhten Patch-Version.
 
 1. Starte Foundry und bleibe auf dem **Setup-/Startbildschirm** (nicht in einer Welt).
 2. Wechsle zum Reiter **„Add-on Modules"** (Add-on-Module).
@@ -95,11 +99,13 @@ auf der Startseite unter **Configuration** → „User Data Path".
    ```
    https://github.com/DominikGursch/foundryvtt-git-sync/releases/latest/download/module.json
    ```
+   Die Versionsnummer im Manifest und der Download-Link zum passenden ZIP
+   werden für jedes Release automatisch aktualisiert.
 
 ### Modul aktivieren (beide Methoden)
 
 **Aktivieren:** Starte deine Welt in Foundry und gehe zu
-**Game Settings → Manage Modules**. Setze bei **„Git Object Sync"** das Häkchen
+**Game Settings → Manage Modules**. Setze bei **„Foundry Git Sync"** das Häkchen
 und speichere. Die eigentliche Einrichtung folgt jetzt in **[GitHub einrichten](#2-github-einrichten)**.
 
 ---
@@ -121,7 +127,7 @@ zu lesen – nichts weiter.
 
 1. Öffne **https://github.com/settings/personal-access-tokens** →
    **Generate new token** (Fine-grained).
-2. **Token name:** z. B. `Foundry Git Object Sync`. **Expiration:** nach Wunsch.
+2. **Token name:** z. B. `Foundry Git Sync`. **Expiration:** nach Wunsch.
 3. **Repository access** → **Only select repositories** → dein Repo auswählen.
 4. **Permissions** → **Repository permissions** → **Contents** auf
    **Read and write** stellen. (Mehr ist nicht nötig.)
@@ -130,7 +136,7 @@ zu lesen – nichts weiter.
 
 ### 2.3 – Modul einstellen
 
-In Foundry: **Settings → Module Settings → „Git Object Sync"**:
+In Foundry: **Settings → Module Settings → „Foundry Git Sync"**:
 
 - **GitHub-Repository:** `DEIN_GITHUB_NAME/REPO_NAME` (z. B. `DominikGursch/foundry-content`)
 - **GitHub-Branch:** `main`
@@ -240,9 +246,11 @@ gesichert werden.
    deiner eigenen Welt-Kompendien**, gruppiert nach Kompendium-Name.
 3. **Export:** Einträge auswählen (auch über mehrere Kompendien hinweg möglich)
    und exportieren. Sie landen im Repo unter `compendia/<technischer-Name>/…`.
-4. **Import:** Die Datei merkt sich, aus welchem Kompendium (Name + Dokumenttyp)
-   sie stammt. Existiert das Kompendium auf der Ziel-Installation noch nicht,
-   wird es **automatisch neu angelegt**.
+4. **Import:** Der Export speichert die technische Kompendium-ID und den
+   Dokumenttyp. Dadurch bleiben auch Kompendien mit gleichem Anzeigenamen
+   getrennt. Existiert das passende Kompendium auf der Ziel-Installation noch
+   nicht, wird es **automatisch neu angelegt**. Ältere Exporte ohne technische
+   ID werden anhand von Anzeigename und Dokumenttyp zugeordnet.
 5. **Ordner innerhalb des Kompendiums** (die du z. B. per Rechtsklick direkt im
    Kompendium anlegst) werden mitexportiert und beim Import an gleicher Stelle
    wiederhergestellt.
@@ -299,9 +307,11 @@ gibt es bei Kompendium-Einträgen naturgemäß nicht – die Ordner-Verhalten-Ei
 
 ## Kompatibilität
 
-- **Getestet:** FoundryVTT **v12**. Alle in dieser Anleitung beschriebenen
-  Abläufe (Buttons, Dialoge, Export/Import, Kompendien) sind darauf ausgelegt
-  und wurden damit geprüft.
+- **Zielversion:** FoundryVTT **v12**. Die automatisierten Tests im Repository
+  prüfen die reine Zuordnungslogik des optionalen `compendium-builder`
+  (`node --test compendium-builder/test.mjs`), nicht die Foundry-Integration.
+  Buttons, Dialoge sowie Export/Import sollten daher in einer Foundry-Instanz
+  separat geprüft werden.
 - **v13:** Foundry v13 hat die internen „Hooks" für Rechtsklick-Menüs in der
   Seitenleiste umbenannt und liefert an Callback-Funktionen kein jQuery-Objekt
   mehr, sondern ein natives HTML-Element. Das Modul registriert daher **beide**

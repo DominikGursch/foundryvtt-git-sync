@@ -4,8 +4,8 @@
 
 > **Important:** this folder is **not** part of the FoundryVTT module itself
 > (`git-object-sync/`). It's a standalone Node.js tool that you copy into your
-> **other, private content repo** – i.e. exactly the repo that the "Git
-> Object Sync" module exports to (`actors/`, `items/`, `scenes/`, `journal/`,
+> **other, private content repo** – i.e. exactly the repo that the "Foundry
+> Git Sync" module exports to (`actors/`, `items/`, `scenes/`, `journal/`,
 > `compendia/<pack>/`).
 
 ## Quick start (for the impatient)
@@ -25,7 +25,7 @@
 
 ## What does this do?
 
-Git Object Sync exports every object as a single, flat JSON file. That's
+Foundry Git Sync exports every object as a single, flat JSON file. That's
 ideal for Git (small, diffable commits), but not a compendium you can
 directly install in Foundry. This script closes that gap:
 
@@ -35,7 +35,7 @@ directly install in Foundry. This script closes that gap:
    `packs/<name>`).
 3. It creates/updates a `module.json`, so your content repo itself can be
    used as an **installable Foundry module** – with real, searchable,
-   browsable compendiums, without needing Git Object Sync's manual
+   browsable compendiums, without needing Foundry Git Sync's manual
    compendium import dialog at all.
 4. Via a GitHub Actions automation, this runs **on a schedule** (cron)
    and/or on every export push – so your compendium module always stays
@@ -49,17 +49,17 @@ directly install in Foundry. This script closes that gap:
   **one pack per export folder** (`packs/actors`, `packs/items`,
   `packs/scenes`, `packs/journal`, plus one pack per own compendium under
   `compendia/<pack>`) – all in a single run, but as separate packs.
-- **Folder structure is restored.** The folder paths supplied by Git Object
+- **Folder structure is restored.** The folder paths supplied by Foundry Git
   Sync (`flags.git-object-sync.folderPath` and
   `flags.git-object-sync.compendium.folderPath`) are converted into real,
   pack-internal folder documents (see `lib.mjs`). Folder IDs are derived
   **deterministically** from the pack name and the name path, so repeated
   runs (cron) don't create duplicate folders.
-- **The private repo stays private.** Foundry's convenient manifest-URL
-  installation only works with public repos (Foundry downloads it without
-  authentication). With a private repo, only **manual installation** remains
-  (download ZIP, copy folder into `Data/modules/`) – see below, same as
-  already described for `git-object-sync/` itself in the main README.
+- **The content repo stays private.** Foundry's manifest-URL installation
+  only works with public repos (Foundry downloads it without authentication).
+  The private content module therefore requires **manual installation**
+  (download ZIP, copy the folder into `Data/modules/`), unlike the public
+  Foundry Git Sync module.
 - **Only the mapping logic is custom code.** The actual packing into a
   LevelDB is entirely handled by the official, Foundry-maintained
   `@foundryvtt/foundryvtt-cli`. `lib.mjs` only contains the pure
@@ -92,7 +92,7 @@ Copy `example-workflow.yml` to `.github/workflows/build-packs.yml` in your
 **private content repo** (not in this module repo!). The workflow:
 
 - runs **daily via cron** as well as **on every push** (i.e. right after an
-  export by Git Object Sync),
+  export by Foundry Git Sync),
 - installs Node and the dependencies,
 - rebuilds all packs,
 - commits `packs/` and `module.json` automatically back into the same repo
@@ -105,7 +105,8 @@ needed on the default `ubuntu-latest` runner.
 
 ## After the build: installing/updating the module
 
-Same as with the main module (private repo → manual installation only):
+The content repository is private, so install it manually (unlike the public
+Foundry Git Sync module):
 
 1. In your private content repo on GitHub: **"Code" → "Download ZIP"** (or
    the release artifact produced by the workflow, if you've added one).

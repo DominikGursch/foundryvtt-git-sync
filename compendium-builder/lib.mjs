@@ -1,16 +1,16 @@
 /**
- * Reine Hilfsfunktionen für den Compendium Builder – ohne Abhängigkeit zu
- * @foundryvtt/foundryvtt-cli, damit sie sich ohne die native LevelDB-Bindung
- * isoliert testen lassen (siehe test.mjs).
+ * Pure helper functions for the Compendium Builder, with no dependency on
+ * @foundryvtt/foundryvtt-cli, so they can be tested without its native LevelDB
+ * binding (see test.mjs).
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
-export const MODULE_ID = "git-object-sync"; // muss mit der Konstante in git-object-sync/scripts/main.js übereinstimmen
+export const MODULE_ID = "git-object-sync"; // Must match the constant in git-object-sync/scripts/main.js.
 
-/** Feste Zuordnung: Export-Ordner der Welt-Dokumente -> Foundry-Dokumenttyp. */
+/** Fixed mapping from world-document export folders to Foundry document types. */
 export const WORLD_SOURCES = [
   { dir: "actors", type: "Actor", packName: "actors", packLabel: "Actors (Welt-Export)" },
   { dir: "items", type: "Item", packName: "items", packLabel: "Items (Welt-Export)" },
@@ -18,7 +18,7 @@ export const WORLD_SOURCES = [
   { dir: "journal", type: "JournalEntry", packName: "journal", packLabel: "Journale (Welt-Export)" }
 ];
 
-/** Primärer Dokumenttyp -> LevelDB-Collection-Name (siehe foundryvtt-cli TYPE_COLLECTION_MAP). */
+/** Map primary document types to LevelDB collection names (see foundryvtt-cli TYPE_COLLECTION_MAP). */
 export const TYPE_COLLECTION_MAP = {
   Actor: "actors",
   Item: "items",
@@ -29,7 +29,7 @@ export const TYPE_COLLECTION_MAP = {
 
 const ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-/** Deterministische, valide Foundry-ID (16 alphanumerische Zeichen) aus einem Seed-String ableiten. */
+/** Derive a deterministic, valid Foundry ID (16 alphanumeric characters) from a seed string. */
 export function stableId(seed) {
   const hash = createHash("sha256").update(seed).digest();
   let id = "";
@@ -37,7 +37,7 @@ export function stableId(seed) {
   return id;
 }
 
-/** Einfacher Slug für Ordner-/Paketnamen (keine Punkte/Sonderzeichen). */
+/** Create a simple slug for folder/package names (no periods or special characters). */
 export function slugify(str) {
   return (
     String(str)
@@ -49,13 +49,12 @@ export function slugify(str) {
 }
 
 /**
- * Ordner-Hierarchie (Namenspfad, Wurzel -> Blatt) in synthetisierte Folder-
- * Dokumente umwandeln. Gibt { leafId, folderDocs } zurück; `folderDocs` sind
- * bereits vollständige LevelDB-Einträge (inkl. `_key`). Bereits im selben Pack
- * erzeugte Zwischenordner werden über `seenFolders` dedupliziert – derselbe
- * Namenspfad ergibt so immer dieselbe (deterministische) ID, auch bei
- * wiederholten Läufen (Cron), ohne dass zwischen Läufen ein State gehalten
- * werden müsste.
+ * Convert a folder hierarchy (name path, root -> leaf) into synthetic Folder
+ * documents. Returns { leafId, folderDocs }; `folderDocs` are complete LevelDB
+ * entries (including `_key`). Intermediate folders already created in this
+ * pack are deduplicated with `seenFolders`, so the same name path always
+ * produces the same deterministic ID, including across cron runs, without
+ * needing to preserve state between runs.
  */
 export function resolveFolderPath(names, { type, packName, seenFolders }) {
   let parentId = null;
@@ -87,11 +86,10 @@ export function resolveFolderPath(names, { type, packName, seenFolders }) {
 }
 
 /**
- * Ein einzelnes, von Git Object Sync exportiertes Dokument in einen LevelDB-
- * tauglichen Eintrag umwandeln: `_key` ergänzen, Ordner-Namenspfad (Flag) in
- * eine echte, pack-interne Ordner-Referenz auflösen, eigene Modul-Flags
- * entfernen (die waren nur für den Re-Import durch Git Object Sync selbst
- * gedacht und haben im fertigen Kompendium nichts verloren).
+ * Convert one document exported by Foundry Git Sync into a LevelDB-compatible
+ * entry: add `_key`, resolve the folder name path (flag) to a real pack-internal
+ * folder reference, and remove this module's flags (they are only used when
+ * re-importing through Foundry Git Sync and do not belong in the finished pack).
  */
 export function reshapeDocument(raw, { type, packName, seenFolders }) {
   const data = structuredClone(raw);
@@ -116,7 +114,7 @@ export function reshapeDocument(raw, { type, packName, seenFolders }) {
   return { doc: data, folderDocs };
 }
 
-/** Alle `.json`-Dateien eines Verzeichnisses (nicht rekursiv) laden. */
+/** Load all `.json` files in a directory (non-recursively). */
 export function readJsonFiles(dir) {
   return fs
     .readdirSync(dir, { withFileTypes: true })
@@ -125,10 +123,10 @@ export function readJsonFiles(dir) {
 }
 
 /**
- * Alle zu bauenden Kompendien ermitteln: die festen Welt-Export-Ordner (sofern
- * vorhanden) sowie jedes Unterverzeichnis von `compendia/`, dessen Typ/Label
- * aus den Git-Object-Sync-Metadaten (`flags.<MODULE_ID>.compendium`) der ersten
- * gefundenen Datei abgeleitet wird.
+ * Find all compendiums to build: the fixed world-export directories, if
+ * present, and each subdirectory of `compendia/`. Derive the type and label
+ * for compendium directories from the Foundry Git Sync metadata
+ * (`flags.<MODULE_ID>.compendium`) in the first file found.
  */
 export function collectSourceGroups(repoRoot) {
   const groups = [];
@@ -150,7 +148,7 @@ export function collectSourceGroups(repoRoot) {
       const sample = JSON.parse(fs.readFileSync(path.join(dir, files[0]), "utf8"));
       const meta = sample.flags?.[MODULE_ID]?.compendium;
       if (!meta?.type) {
-        console.warn(`Übersprungen (keine Git-Object-Sync-Metadaten gefunden): ${dir}`);
+        console.warn(`Skipped (no Foundry Git Sync metadata found): ${dir}`);
         continue;
       }
       groups.push({
@@ -166,14 +164,14 @@ export function collectSourceGroups(repoRoot) {
   return groups;
 }
 
-/** module.json anlegen bzw. den `packs`-Abschnitt anhand der gebauten Packs aktualisieren. */
+/** Create module.json or update its `packs` section using the built packs. */
 export function buildModuleManifest(existingManifest, packs) {
   const manifest = existingManifest
     ? structuredClone(existingManifest)
     : {
         id: "foundry-content",
         title: "Foundry Content (auto-built)",
-        description: "Automatisch aus Git-Object-Sync-Exporten gebaute Kompendien.",
+        description: "Compendiums built automatically from Foundry Git Sync exports.",
         version: "0.0.0",
         compatibility: { minimum: "12", verified: "13" },
         packs: []

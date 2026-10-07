@@ -1,6 +1,6 @@
 /**
- * Smoke-Tests für lib.mjs (reine Logik, keine Abhängigkeit zu
- * @foundryvtt/foundryvtt-cli nötig). Ausführen mit:
+ * Smoke tests for lib.mjs (pure logic; no dependency on
+ * @foundryvtt/foundryvtt-cli required). Run with:
  *   node --test test.mjs
  */
 import { test } from "node:test";
@@ -43,7 +43,7 @@ test("resolveFolderPath baut die Hierarchie Wurzel -> Blatt auf und dedupliziert
   assert.equal(r1.folderDocs[1].folder, r1.folderDocs[0]._id, "Kind zeigt auf die ID des Elternordners");
   assert.equal(r1.leafId, r1.folderDocs[1]._id);
 
-  // Zweiter Aufruf mit überlappendem Pfad (gleicher Wurzelordner) darf "Waffen" nicht erneut anlegen.
+  // A second call with an overlapping path (same root folder) must not recreate "Waffen".
   const r2 = resolveFolderPath(["Waffen", "Schilde"], { type: "Item", packName: "items", seenFolders });
   assert.equal(r2.folderDocs.length, 1, "nur der neue Unterordner 'Schilde' darf entstehen");
   assert.equal(r2.folderDocs[0].name, "Schilde");
@@ -121,7 +121,7 @@ test("collectSourceGroups erkennt Welt-Export-Ordner und compendia/*-Unterordner
     assert.equal(compendiumGroup.packLabel, "Monster");
     assert.equal(compendiumGroup.packName, "world-monster");
 
-    // Ordner ohne Export-Dateien (z. B. items/ existiert nicht) dürfen nicht auftauchen.
+    // Directories without export files (e.g. a missing items/ directory) must not appear.
     assert.ok(!groups.find((g) => g.dir === "items"));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

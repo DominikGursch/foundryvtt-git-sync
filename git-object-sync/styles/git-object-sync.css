@@ -1,15 +1,14 @@
 /* -------------------------------------------------------------------------- */
-/*  Git Object Sync                                                           */
-/*  Das komplette Export/Import-Dialog-Styling wird direkt mit dem Dialog     */
-/*  eingebettet (main.js/buildCheckboxList), damit es unabhängig davon         */
-/*  funktioniert, ob diese externe Datei rechtzeitig geladen wird. Hier       */
-/*  bleiben nur die Seitenleisten-Buttons übrig, die außerhalb des Dialogs    */
-/*  eingefügt werden (injectDirectoryButtons).                               */
+/*  Foundry Git Sync                                                          */
+/*  All export/import dialog styling is embedded directly in the dialog        */
+/*  (main.js/buildCheckboxList), so it does not depend on this external file   */
+/*  loading in time. Only the sidebar buttons remain here; they are inserted   */
+/*  outside the dialog by injectDirectoryButtons.                              */
 /* -------------------------------------------------------------------------- */
 
-/* Buttons oben in der Seitenleiste – bewusst ohne eigene Farbgebung, damit  */
-/* sie sich wie die übrigen Verzeichnis-Buttons (z. B. "Ordner erstellen")   */
-/* in jedes System-Theme einfügen. */
+/* Sidebar buttons intentionally have no custom colors so they blend into     */
+/* Foundry's active theme like the other directory buttons (e.g. "Create      */
+/* Folder").                                                                   */
 .gos-buttons {
   display: flex;
   gap: 4px;

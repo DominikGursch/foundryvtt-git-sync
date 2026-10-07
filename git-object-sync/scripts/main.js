@@ -1,35 +1,35 @@
 /**
- * Git Object Sync
+ * Foundry Git Sync
  * -----------------------------------------------------------------------------
- * Exportiert einzelne Foundry-Dokumente (Actors, Items, Szenen, Journal) sowie
- * eigene Welt-Kompendien als JSON-Dateien direkt in ein GitHub-Repository und
- * importiert sie von dort wieder – inklusive referenzierter Bilder/Maps als Assets.
+ * Export individual Foundry documents (Actors, Items, Scenes, Journals) and
+ * user-owned world compendiums as JSON files directly to a GitHub repository,
+ * then import them again, including referenced images/maps as assets.
  *
- * - Rechtsklick auf ein Objekt in der Seitenleiste -> "Export nach Git"
- * - Button in der Seitenleiste -> Checkbox-Dialog für Mehrfach-Export/-Import
- *   (auch in der Kompendium-Seitenleiste, dort über alle Welt-Kompendien hinweg)
+ * - Right-click an item in a sidebar -> "Export to Git"
+ * - Sidebar button -> checkbox dialog for multi-item export/import
+ *   (also in the compendium sidebar, across all world compendiums)
  */
 
 const MODULE_ID = "git-object-sync";
 
 /**
- * Konfiguration je Dokumenttyp.
+ * Configuration for each document type.
  *
- * `contextHook` ist der Kontextmenü-Hook aus Foundry v12 (`get<Doc>DirectoryEntryContext`,
- * jQuery-Element im Callback). `contextHookV13` ist der in v13 umbenannte Nachfolger
- * (`get<Doc>ContextOptions`, natives HTMLElement im Callback, siehe
- * `client/applications/sidebar/document-directory.mjs`). Da pro installierter
- * Foundry-Version immer nur einer der beiden tatsächlich feuert, ist die
- * Doppel-Registrierung beider Namen gefahrlos und macht den Kontextmenü-Eintrag
- * "Export nach Git" unter v12 UND v13 verfügbar (siehe addContextMenuEntry).
+ * `contextHook` is the Foundry v12 context-menu hook (`get<Doc>DirectoryEntryContext`,
+ * with a jQuery element in the callback). `contextHookV13` is its renamed v13
+ * successor (`get<Doc>ContextOptions`, with a native HTMLElement; see
+ * `client/applications/sidebar/document-directory.mjs`). Only one hook fires
+ * for a given Foundry version, so registering both names is safe and makes the
+ * "Export to Git" context-menu entry available in both v12 and v13
+ * (see addContextMenuEntry).
  */
 const TYPE_CONFIG = {
   Actor: { folder: "actors", collection: () => game.actors, uiKey: "actors", renderHook: "renderActorDirectory", contextHook: "getActorDirectoryEntryContext", contextHookV13: "getActorContextOptions" },
   Item: { folder: "items", collection: () => game.items, uiKey: "items", renderHook: "renderItemDirectory", contextHook: "getItemDirectoryEntryContext", contextHookV13: "getItemContextOptions" },
   Scene: { folder: "scenes", collection: () => game.scenes, uiKey: "scenes", renderHook: "renderSceneDirectory", contextHook: "getSceneDirectoryEntryContext", contextHookV13: "getSceneContextOptions" },
-  // v12-Hook-Name korrigiert: Foundry nutzt den vollen Dokumentnamen ("JournalEntry"),
-  // nicht nur "Journal" - der Eintrag "Export nach Git" fehlte dadurch bislang im
-  // Journal-Kontextmenü (siehe getJournalEntryDirectoryEntryContext in der Foundry-API).
+  // Use the full document name ("JournalEntry") for the v12 hook, not "Journal";
+  // otherwise, the "Export to Git" entry is missing from the Journal context menu
+  // (see getJournalEntryDirectoryEntryContext in the Foundry API).
   JournalEntry: { folder: "journal", collection: () => game.journal, uiKey: "journal", renderHook: "renderJournalDirectory", contextHook: "getJournalEntryDirectoryEntryContext", contextHookV13: "getJournalEntryContextOptions" }
 };
 
@@ -41,15 +41,15 @@ function t(key, data = {}) {
   return game.i18n.format(key, data);
 }
 
-/** Sollen referenzierte Assets (Bilder, Maps, Audio) mitsynchronisiert werden? */
+/** Whether to sync referenced assets (images, maps, audio). */
 function syncAssets() {
   return game.settings.get(MODULE_ID, "syncAssets");
 }
 
 /**
- * Fortschrittsanzeige über die eingebaute Foundry-Ladeleiste (oben mittig).
- * Liefert ein Objekt mit update(fraction 0..1, message) und done(message).
- * Fällt still zurück, falls die Ladeleiste nicht verfügbar ist.
+ * Show progress using Foundry's built-in loading bar (top center).
+ * Returns an object with update(fraction 0..1, message) and done(message).
+ * Does nothing if the loading bar is unavailable.
  */
 function makeProgress(label) {
   const show = (pct, msg) => {
@@ -59,7 +59,7 @@ function makeProgress(label) {
         pct: Math.round(Math.max(0, Math.min(100, pct)))
       });
     } catch (err) {
-      /* Ladeleiste nicht verfügbar -> ignorieren. */
+      /* Ignore when the loading bar is unavailable. */
     }
   };
   show(0, label);
@@ -69,7 +69,7 @@ function makeProgress(label) {
   };
 }
 
-/** Dateinamen sicher machen (keine Sonderzeichen, keine Leerzeichen). */
+/** Make a filename safe (no special characters or spaces). */
 function sanitize(name) {
   return String(name ?? "unnamed")
     .normalize("NFKD")
@@ -89,7 +89,7 @@ function basename(p) {
   return i >= 0 ? p.slice(i + 1) : p;
 }
 
-/** Verzeichnis (rekursiv) im Data-Bereich anlegen, falls nicht vorhanden. */
+/** Recursively create a directory in the Data area if it does not exist. */
 async function ensureDir(path) {
   const parts = path.split("/").filter(Boolean);
   let current = "";
@@ -98,26 +98,25 @@ async function ensureDir(path) {
     try {
       await FilePicker.createDirectory("data", current);
     } catch (err) {
-      // Existiert bereits -> ignorieren. Andere Fehler weiterreichen.
+      // Ignore if it already exists; propagate all other errors.
       if (!/exist/i.test(err?.message ?? "")) throw err;
     }
   }
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Assets (Bilder, Maps, Audio) einsammeln und übertragen                     */
+/*  Collect and transfer assets (images, maps, audio)                          */
 /* -------------------------------------------------------------------------- */
 
-// Medien-Endungen, die als Asset gelten.
+// Media file extensions treated as assets.
 const ASSET_EXT = /\.(webp|png|jpe?g|gif|bmp|svg|webm|mp4|m4v|ogv|ogg|mp3|wav|m4a|flac|opus|pdf)(\?.*)?$/i;
-// Pfade, die auf jeder Installation ohnehin vorhanden sind -> nicht mitsichern.
+// Paths that are already present on every installation and should not be backed up.
 const ASSET_SKIP = /^(https?:|data:|icons\/|ui\/|cards\/|sounds\/|fonts\/|systems\/|modules\/)/i;
 
 /**
- * Durchsucht ein Dokument-Objekt rekursiv nach lokalen Asset-Pfaden
- * (z. B. Karten-Hintergründe, Token-Bilder, Portraits). Liefert eindeutige,
- * relative Data-Pfade zurück. Externe URLs und Core-/System-Assets werden
- * ausgelassen.
+ * Recursively search a document object for local asset paths
+ * (e.g. map backgrounds, token images, portraits). Returns unique,
+ * relative Data paths. External URLs and core/system assets are skipped.
  */
 function collectAssetPaths(data) {
   const found = new Set();
@@ -143,13 +142,13 @@ async function fetchBytes(url) {
   return new Uint8Array(await res.arrayBuffer());
 }
 
-/** URL, unter der eine Data-Datei abgerufen werden kann (inkl. Route-Präfix). */
+/** URL for retrieving a Data file, including the route prefix. */
 function dataUrl(path) {
   const encoded = path.split("/").map(encodeURIComponent).join("/");
   return foundry.utils.getRoute(encoded);
 }
 
-/** MIME-Typ grob aus der Dateiendung ableiten (für data:-URI-Vorschauen). */
+/** Infer a MIME type from the file extension for data-URI previews. */
 function guessMime(path) {
   const ext = String(path).split(".").pop().toLowerCase();
   return (
@@ -182,10 +181,10 @@ function base64ToBytes(b64) {
 }
 
 /**
- * Git-Blob-SHA1 eines Texts berechnen (identisch zu "git hash-object" bzw. der
- * SHA, die GitHubs Baum-API für eine Datei liefert). Damit lässt sich lokal
- * prüfen, ob ein Dokument gegenüber dem Repo-Stand unverändert ist, ohne den
- * Datei-Inhalt vom Server laden zu müssen (siehe Delta-Erkennung weiter unten).
+ * Calculate the Git blob SHA-1 for text (equivalent to `git hash-object` or
+ * the SHA returned by GitHub's tree API for a file). This lets us check locally
+ * whether a document is unchanged from the repository without downloading its
+ * contents (see delta detection below).
  */
 async function gitBlobSha1(text) {
   const content = new TextEncoder().encode(text);
@@ -222,7 +221,7 @@ async function ghApi(path, { method = "GET", body } = {}) {
   if (!token) throw new Error(t("GOS.Notify.NoToken"));
   const res = await fetch(`https://api.github.com${path}`, {
     method,
-    cache: "no-store", // sonst liefert der Browser beim erneuten Lesen des Branch-Tips einen veralteten (gecachten) Stand
+    cache: "no-store", // Prevent the browser from returning stale data when reading the branch tip again.
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/vnd.github+json",
@@ -238,7 +237,7 @@ async function ghApi(path, { method = "GET", body } = {}) {
   return res.status === 204 ? null : res.json();
 }
 
-/** Mehrere Dateien in einem einzigen Commit hochladen (Git-Data-API). */
+/** Upload multiple files in a single commit using the Git Data API. */
 async function githubPushFiles(files, message, onProgress = null) {
   const { repo, branch } = ghConfig();
   if (!repo.includes("/")) throw new Error(t("GOS.Notify.BadRepo"));
@@ -251,13 +250,14 @@ async function githubPushFiles(files, message, onProgress = null) {
     const commit = await ghApi(`/repos/${repo}/git/commits/${baseSha}`);
     baseTree = commit.tree.sha;
   } catch (err) {
-    // Repo/Branch noch leer. Ein komplett leeres Repo (kein einziger Commit)
-    // lehnt die Git-Data-API mit 409 ab -> ersten Commit per Contents-API anlegen.
+    // The repository/branch is empty. The Git Data API rejects a completely
+    // empty repository (no commits) with 409, so create the first commit via
+    // the Contents API.
     try {
       await ghApi(`/repos/${repo}/contents/.gitkeep`, {
         method: "PUT",
         body: {
-          message: "Git Object Sync: Repository initialisiert",
+          message: "Foundry Git Sync: Repository initialized",
           content: "",
           branch
         }
@@ -267,7 +267,7 @@ async function githubPushFiles(files, message, onProgress = null) {
       const commit = await ghApi(`/repos/${repo}/git/commits/${baseSha}`);
       baseTree = commit.tree.sha;
     } catch (err2) {
-      // Fallback: ohne Basis fortfahren (initialer Commit via Git-Data-API).
+      // Fall back to no base (initial commit via the Git Data API).
       baseSha = null;
       baseTree = null;
     }
@@ -283,7 +283,7 @@ async function githubPushFiles(files, message, onProgress = null) {
     onProgress?.(tree.length, files.length + 1);
   }
 
-  // Aktuellen Branch-Stand (Tip-Commit + zugehörigen Baum) frisch lesen.
+  // Fetch the current branch state (tip commit and corresponding tree).
   const readBase = async () => {
     const ref = await ghApi(`/repos/${repo}/git/ref/heads/${branch}`);
     const sha = ref.object.sha;
@@ -291,11 +291,10 @@ async function githubPushFiles(files, message, onProgress = null) {
     return { sha, tree: commit.tree.sha };
   };
 
-  // Commit anlegen und Ref setzen. Wenn der Branch zwischenzeitlich fortgeschrieben
-  // wurde ("Update is not a fast forward", 422), holen wir den neuen Stand und
-  // setzen unseren Commit darauf neu auf (Rebase auf den aktuellen Tip). Zwischen
-  // den Versuchen warten wir kurz (Backoff), damit GitHub den neuen Ref-Stand
-  // zuverlässig ausliefert und ein evtl. gleichzeitiger Server-Sync durchläuft.
+  // Create the commit and update the ref. If the branch advances in the meantime
+  // ("Update is not a fast forward", 422), fetch the latest state and rebase our
+  // commit onto its current tip. Wait briefly between retries so GitHub can serve
+  // the updated ref and any concurrent sync can finish.
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const maxAttempts = 8;
   let lastErr = null;
@@ -322,19 +321,19 @@ async function githubPushFiles(files, message, onProgress = null) {
       const msg = String(err?.message ?? "");
       const conflict = /not a fast forward|fast-forward|reference already exists|422/i.test(msg);
       if (!conflict || attempt >= maxAttempts) break;
-      // Branch hat sich verschoben -> kurz warten, aktuellen Stand holen, erneut versuchen.
+      // The branch advanced; wait briefly, fetch its latest state, and retry.
       await sleep(300 * attempt); // 300ms, 600ms, 900ms, ...
       const base = await readBase();
       baseSha = base.sha;
       baseTree = base.tree;
     }
   }
-  // Alle Versuche erschöpft: verständlichen Konflikt-Fehler werfen.
+  // Retries exhausted: throw a clear conflict error.
   const detail = String(lastErr?.message ?? "").slice(0, 160);
   throw new Error(t("GOS.Notify.PushConflict", { detail }));
 }
 
-/** Kompletten Datei-Baum des Branches als Map path -> blob-sha holen. */
+/** Fetch the branch's complete file tree as a map of path -> blob SHA. */
 async function githubTree() {
   const { repo, branch } = ghConfig();
   const map = new Map();
@@ -342,7 +341,7 @@ async function githubTree() {
     const data = await ghApi(`/repos/${repo}/git/trees/${branch}?recursive=1`);
     for (const e of data.tree || []) if (e.type === "blob") map.set(e.path, e.sha);
   } catch (err) {
-    // Branch existiert noch nicht -> leerer Baum.
+    // The branch does not exist yet, so return an empty tree.
   }
   return map;
 }
@@ -354,15 +353,15 @@ async function githubReadBlob(sha) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Export (beide Modi)                                                        */
+/*  Export (both modes)                                                        */
 /* -------------------------------------------------------------------------- */
 
-/** Ob Assets beim Export in Sammelordner (assets/<Typ>/…) abgelegt werden. */
+/** Whether to put exported assets in shared folders (assets/<type>/...). */
 function exportFlattenAssets() {
   return game.settings.get(MODULE_ID, "exportFlattenAssets") === true;
 }
 
-/** Ordner-Pfad eines Dokuments in der Foundry-Oberfläche (Wurzel -> Blatt). */
+/** A document's folder path in the Foundry UI (root -> leaf). */
 function folderPathOf(doc) {
   const names = [];
   let f = doc?.folder ?? null;
@@ -374,21 +373,21 @@ function folderPathOf(doc) {
 }
 
 /**
- * Schreibt die Asset-Referenzen in `data` auf ihren repo-relativen Zielpfad um
- * und liefert die Zuordnung `dest -> src` für die Speicherung. Mutiert `data`.
+ * Rewrite asset references in `data` to their repository-relative destination
+ * paths and return the `dest -> src` mapping for storage. Mutates `data`.
  *
- * - `flatten` = true  -> alle Assets nach `<Typ>/<Dateiname>` (Sammelordner).
- * - `flatten` = false -> Originalpfade beibehalten (Referenzen unverändert).
+ * - `flatten` = true  -> put all assets in `<type>/<filename>` (shared folder).
+ * - `flatten` = false -> keep original paths (references unchanged).
  */
 function remapExportAssets(data, flatten, docType) {
-  const map = new Map(); // dest (Repo-Pfad) -> src (Original-Pfad zum Abrufen)
+  const map = new Map(); // dest (repository path) -> src (original path to retrieve)
   const remap = (s) => {
     const trimmed = String(s).trim();
     if (trimmed && ASSET_EXT.test(trimmed) && !ASSET_SKIP.test(trimmed)) {
       const clean = trimmed.split("?")[0].replace(/^\/+/, "");
       const dest = flatten ? `${docType}/${basename(clean)}` : clean;
       if (!map.has(dest)) map.set(dest, clean);
-      return flatten ? dest : null; // ohne Flatten die Referenz unverändert lassen
+      return flatten ? dest : null; // Keep the reference unchanged when not flattening.
     }
     return null;
   };
@@ -414,21 +413,19 @@ function remapExportAssets(data, flatten, docType) {
 }
 
 /**
- * Baut die Export-Nutzdaten (Repo-Pfad + JSON-Text + Asset-Zuordnung) für ein
- * einzelnes Dokument – ohne etwas hochzuladen. Wird sowohl vom eigentlichen
- * Export als auch von der Delta-Erkennung (Sync-Status im Dialog) genutzt,
- * damit beide exakt denselben Inhalt berechnen.
+ * Build the export payload (repository path + JSON text + asset mapping) for
+ * one document without uploading anything. Used by both the actual export and
+ * delta detection (sync status in the dialog) so they calculate identical content.
  */
 function buildExportJson(doc, flatten, withAssets) {
   const cfg = TYPE_CONFIG[doc.documentName];
-  const data = doc.toObject(); // vollständige Quelldaten inkl. _id
-  // Ordner-Pfad der Oberfläche mitspeichern, damit der Import ihn wiederherstellen kann.
+  const data = doc.toObject(); // Complete source data, including _id.
+  // Store the UI folder path so it can be restored during import.
   foundry.utils.setProperty(data, `flags.${MODULE_ID}.folderPath`, folderPathOf(doc));
-  // Die rohe Ordner-ID gehört zur Welt-Seitenleiste dieser Installation und wird von
-  // unserem eigenen Import ohnehin nie gelesen (siehe resolveImportFolder) – sie würde
-  // aber ein externes Tool (z. B. eine Kompendium-Build-Pipeline), das diese Datei direkt
-  // liest, mit einer fremden/bedeutungslosen ID verwirren. Daher konsequent entfernen,
-  // analog zum Kompendium-Export (siehe buildCompendiumExportJson).
+  // The raw folder ID belongs to this installation's world sidebar and is never
+  // read by our importer (see resolveImportFolder). It could confuse an external
+  // tool (e.g. a compendium build pipeline) that reads this file directly, so
+  // remove it consistently, as with compendium exports (see buildCompendiumExportJson).
   delete data.folder;
   const assetMap = withAssets ? remapExportAssets(data, flatten, doc.documentName) : new Map();
   const json = JSON.stringify(data, null, 2);
@@ -436,17 +433,17 @@ function buildExportJson(doc, flatten, withAssets) {
   return { folder: cfg.folder, fileName, json, assetMap };
 }
 
-/** Ein einzelnes Dokument exportieren (Komfort-Wrapper). */
+/** Export a single document (convenience wrapper). */
 async function exportDocument(doc, opts = {}) {
   return exportDocuments([doc], opts);
 }
 
 /**
- * Mehrere Dokumente exportieren. Sammelt JSON + referenzierte Assets und
- * pusht sie als einzelnen Commit direkt ins konfigurierte GitHub-Repository.
- * Gibt { count, assets } zurück.
+ * Export multiple documents. Collect their JSON and referenced assets, then
+ * push them as a single commit to the configured GitHub repository.
+ * Returns { count, assets }.
  *
- * `opts.flattenAssets` überschreibt die globale Einstellung für diesen Export.
+ * `opts.flattenAssets` overrides the global setting for this export.
  */
 async function exportDocuments(docs, opts = {}) {
   const withAssets = syncAssets();
@@ -466,10 +463,9 @@ async function exportDocuments(docs, opts = {}) {
 }
 
 /**
- * Gemeinsame Upload-Logik für einen Export: die gesammelten JSON-Dateien und
- * die dazugehörigen Assets als einen einzigen Commit nach GitHub pushen.
- * Wird sowohl vom Welt-Dokument-Export als auch vom Kompendium-Export genutzt,
- * damit beide exakt dasselbe Fortschritts-/Commit-Verhalten haben.
+ * Shared export upload logic: push the collected JSON files and their assets
+ * to GitHub as a single commit. Used by both world-document and compendium
+ * exports so they share the same progress and commit behavior.
  */
 async function pushExportBundle(jsonWrites, assetMap) {
   const progress = makeProgress(t("GOS.Progress.Exporting"));
@@ -490,30 +486,28 @@ async function pushExportBundle(jsonWrites, assetMap) {
     }
     await githubPushFiles(
       files,
-      `Git Object Sync: ${jsonWrites.length} Objekt(e), ${assets} Asset(s)`,
+      `Foundry Git Sync: ${jsonWrites.length} document(s), ${assets} asset(s)`,
       (done, total) =>
         progress.update(0.5 + (done / total) * 0.5, t("GOS.Progress.Uploading", { done, total }))
     );
     progress.done(t("GOS.Progress.Done"));
     return { count: jsonWrites.length, assets };
   } finally {
-    // Ladeleiste immer ausblenden – auch wenn githubPushFiles abbricht.
+    // Always hide the loading bar, even if githubPushFiles fails.
     progress.done("");
   }
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Delta-Erkennung (Sync-Status für Export-/Import-Dialog)                    */
+/*  Delta detection (sync status for export/import dialogs)                    */
 /* -------------------------------------------------------------------------- */
 
 /**
- * Sync-Status eines lokalen Dokuments gegenüber dem GitHub-Repo ermitteln:
- * "new" (noch nie exportiert), "changed" (Inhalt weicht vom Repo-Stand ab)
- * oder "unchanged" (identisch zum letzten Export). Basiert auf einem
- * Vergleich der Git-Blob-SHA, damit kein zusätzlicher Datei-Download nötig ist.
- * Nutzt dieselben Export-Einstellungen (Assets/Sammelordner) wie ein
- * tatsächlicher Export – bei abweichenden Einstellungen kann der Status daher
- * ungenau sein.
+ * Determine the sync status of a local document against the GitHub repository:
+ * "new" (never exported), "changed" (content differs from the repository), or
+ * "unchanged" (identical to the last export). Compare Git blob SHAs to avoid
+ * downloading the file contents. Uses the same export settings (assets/shared
+ * folders) as an actual export, so different settings can make the status inaccurate.
  */
 async function exportDeltaStatus(doc, tree, flatten, withAssets) {
   const cfg = TYPE_CONFIG[doc.documentName];
@@ -526,11 +520,10 @@ async function exportDeltaStatus(doc, tree, flatten, withAssets) {
 }
 
 /**
- * Sync-Status eines Import-Eintrags gegenüber dem lokalen Dokument ermitteln:
- * "new" (noch kein lokales Dokument mit dieser ID), "changed" (lokales
- * Dokument existiert, Inhalt weicht vom Repo-Eintrag ab) oder "unchanged"
- * (ein erneuter Export des lokalen Dokuments würde exakt diese Datei ergeben –
- * es gibt also nichts zu importieren).
+ * Determine the sync status of an import entry against the local document:
+ * "new" (no local document with this ID), "changed" (a local document exists
+ * but its content differs from the repository), or "unchanged" (exporting the
+ * local document again would produce this exact file, so there is nothing to import).
  */
 async function importDeltaStatus(type, entry, tree, flatten, withAssets) {
   const id = entry.base.match(/__([A-Za-z0-9]+)\.json$/i)?.[1];
@@ -546,7 +539,7 @@ async function importDeltaStatus(type, entry, tree, flatten, withAssets) {
 /*  Import                                                                     */
 /* -------------------------------------------------------------------------- */
 
-/** Verfügbare Import-Einträge eines Typs auflisten: [{ value, base }]. */
+/** List available import entries for a type: [{ value, base }]. */
 async function listImportEntries(type) {
   const cfg = TYPE_CONFIG[type];
   const tree = await githubTree();
@@ -556,36 +549,36 @@ async function listImportEntries(type) {
     .map((p) => ({ value: p, base: p.slice(prefix.length) }));
 }
 
-/** Rohdaten eines Import-Eintrags laden (für Vorschau/Import). */
+/** Load the raw data for an import entry (for preview/import). */
 async function readEntryData(value, tree = null) {
   const sha = (tree ?? (await githubTree())).get(value);
   if (!sha) return null;
   return JSON.parse(new TextDecoder().decode(await githubReadBlob(sha)));
 }
 
-/** Konfigurierter Ziel-Unterordner für importierte Assets (leer = Originalpfad). */
+/** Configured destination subfolder for imported assets (empty = original path). */
 function importAssetPrefix() {
   return (game.settings.get(MODULE_ID, "importAssetPrefix") || "")
     .trim()
     .replace(/^\/+|\/+$/g, "");
 }
 
-/** Zielpfad eines Assets beim Import (mit optionalem Präfix). */
+/** Determine an asset's import destination path, with an optional prefix. */
 function importAssetTarget(a, prefix) {
   return prefix ? `${prefix}/${a}` : a;
 }
 
-/** Globaler Import-Ordner-Modus: original | none | custom. */
+/** Global import folder mode: original | none | custom. */
 function importFolderMode() {
   return game.settings.get(MODULE_ID, "importFolderMode") || "original";
 }
 
-/** Name des festen Import-Ordners (nur im Modus "custom"). */
+/** Name of the fixed import folder (only in "custom" mode). */
 function importFolderName() {
   return (game.settings.get(MODULE_ID, "importFolderName") || "").trim();
 }
 
-/** Ordner-Hierarchie (nach Namen) in der Seitenleiste anlegen; Blatt-ID zurückgeben. */
+/** Create a folder hierarchy in the sidebar by name and return the leaf ID. */
 async function ensureFolderPath(type, names) {
   let parentId = null;
   for (const name of names) {
@@ -600,11 +593,12 @@ async function ensureFolderPath(type, names) {
 }
 
 /**
- * Ziel-Ordner (Seitenleiste) für ein importiertes Dokument bestimmen und in
- * `data.folder` setzen. Entfernt so auch die weltfremde Original-Ordner-ID. Modi:
- *  - original: gleiche Ordner-Struktur wie beim Export (per Namen neu anlegen)
- *  - none:     kein Ordner (Wurzel)
- *  - custom:   fester Ordner mit konfiguriertem Namen
+ * Determine the destination sidebar folder for an imported document and set
+ * `data.folder`. This also removes the source folder ID, which is not valid in
+ * the destination world. Modes:
+ *  - original: recreate the exported folder structure by name
+ *  - none:     no folder (root)
+ *  - custom:   a fixed folder with the configured name
  */
 async function resolveImportFolder(type, data, mode, customName) {
   if (mode === "none") {
@@ -622,8 +616,8 @@ async function resolveImportFolder(type, data, mode, customName) {
 }
 
 /**
- * Schreibt die Asset-Pfade im Datenobjekt so um, dass sie auf den Import-Zielort
- * (mit Präfix) zeigen. Mutiert `data` direkt. Ohne Präfix passiert nichts.
+ * Rewrite asset paths in the data object to point to their import destination
+ * (with an optional prefix). Mutates `data` directly. Does nothing without a prefix.
  */
 function rewriteAssetPaths(data, prefix) {
   if (!prefix) return;
@@ -655,7 +649,7 @@ function rewriteAssetPaths(data, prefix) {
   visit(data);
 }
 
-/** Referenzierte Assets aus GitHub an ihren Zielort zurückschreiben. */
+/** Restore referenced assets from GitHub to their destination paths. */
 async function restoreAssetsGithub(data, tree, prefix = "") {
   for (const a of collectAssetPaths(data)) {
     try {
@@ -672,14 +666,14 @@ async function restoreAssetsGithub(data, tree, prefix = "") {
   }
 }
 
-/** Aus geladenen Daten ein Dokument anlegen bzw. aktualisieren. */
+/** Create or update a document from loaded data. */
 async function importDataDoc(type, data, folderOpts = {}) {
   const cls = getDocumentClass(type);
   const collection = TYPE_CONFIG[type].collection();
   const existing = data._id ? collection.get(data._id) : null;
   const overwrite = game.settings.get(MODULE_ID, "overwriteImport");
 
-  // Ziel-Ordner in der Seitenleiste bestimmen (und weltfremde Ordner-ID ersetzen).
+  // Resolve the destination sidebar folder and replace the source folder ID.
   const mode = folderOpts.folderMode ?? importFolderMode();
   const name = folderOpts.folderName ?? importFolderName();
   await resolveImportFolder(type, data, mode, name);
@@ -700,9 +694,9 @@ async function importDataDoc(type, data, folderOpts = {}) {
 }
 
 /**
- * Einen Import-Eintrag laden (inkl. Assets) und als Dokument importieren.
- * `tree` wird im GitHub-Modus einmalig übergeben, um Mehrfach-Abfragen zu sparen.
- * `opts` überschreibt die globalen Einstellungen für diesen Import
+ * Load an import entry (including assets) and import it as a document.
+ * `tree` is passed once in GitHub mode to avoid repeated requests.
+ * `opts` overrides the global settings for this import
  * ({ assetPrefix, folderMode, folderName }).
  */
 async function importValue(type, value, tree = null, opts = {}) {
@@ -712,51 +706,60 @@ async function importValue(type, value, tree = null, opts = {}) {
   if (!sha) throw new Error(`Nicht im Repo: ${value}`);
   const data = JSON.parse(new TextDecoder().decode(await githubReadBlob(sha)));
   if (withAssets) await restoreAssetsGithub(data, tree ?? (await githubTree()), prefix);
-  // Nach dem Zurückschreiben die Referenzen auf den Zielort umbiegen.
+  // After restoring assets, update references to point to the destination.
   rewriteAssetPaths(data, prefix);
   return importDataDoc(type, data, { folderMode: opts.folderMode, folderName: opts.folderName });
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Kompendien (Welt-Kompendien)                                               */
+/*  Compendiums (world compendiums)                                            */
 /* -------------------------------------------------------------------------- */
-/*  Kompendien werden bewusst nur für GM-eigene Welt-Kompendien unterstützt    */
-/*  (metadata.packageType === "world") – Modul-/System-Kompendien werden      */
-/*  übersprungen, weil deren Inhalt ohnehin über das jeweilige Paket           */
-/*  versioniert wird. Alle Objekte aller Welt-Kompendien werden für den       */
-/*  Export/Import-Dialog zu einer gemeinsamen, nach Kompendium gruppierten    */
-/*  Liste zusammengeführt (Auswahlwert "<pack.collection>::<id>"). Kompendium- */
-/*  interne Unterordner (getrennt von der Welt-Seitenleiste, siehe            */
-/*  ensureCompendiumFolderPath) werden dabei per Namenspfad mitexportiert und  */
-/*  im Ziel-Kompendium anhand des Namens wiederhergestellt bzw. neu angelegt.  */
+/*  Only GM-owned world compendiums are supported (metadata.packageType ===  */
+/*  "world"); module/system compendiums are skipped because their contents   */
+/*  are versioned by their respective packages. All documents from all world */
+/*  compendiums are combined into one list grouped by compendium for the     */
+/*  export/import dialog (selection value "<pack.collection>::<id>").        */
+/*  Internal compendium folders (separate from the world sidebar; see         */
+/*  ensureCompendiumFolderPath) are exported by name path and recreated by   */
+/*  name in the destination compendium.                                      */
 /* -------------------------------------------------------------------------- */
 
-/** Alle GM-eigenen Welt-Kompendien (keine Modul-/System-Kompendien). */
+/** Return all GM-owned world compendiums (excluding module/system compendiums). */
 function worldPacks() {
   return game.packs.filter((p) => p.metadata.packageType === "world");
 }
 
-/** Bereits vorhandenes Welt-Kompendium anhand Anzeigename + Dokumenttyp suchen. */
-function findLocalWorldPack(type, label) {
-  return worldPacks().find((p) => p.documentName === type && p.title === label) ?? null;
+/** Find a world compendium by its stable collection ID, falling back to its label for legacy exports. */
+function findLocalWorldPack(type, meta) {
+  const packs = worldPacks().filter((p) => p.documentName === type);
+  const collection = typeof meta.collection === "string" ? meta.collection : "";
+  if (collection) return packs.find((p) => p.collection === collection) ?? null;
+  return packs.find((p) => p.title === meta.label) ?? null;
 }
 
 /**
- * Ziel-Kompendium für einen Import-Lauf auflösen: ein vorhandenes Welt-Kompendium
- * mit gleichem Namen + Typ wiederverwenden, sonst neu anlegen. `packCache` bündelt
- * das Ergebnis pro Lauf (Schlüssel "<Typ>::<Label>"), damit bei mehreren
- * Dokumenten desselben Kompendiums nicht mehrfach gesucht bzw. angelegt wird.
+ * Resolve the destination pack for an import: reuse a world pack with the same
+ * collection ID and document type, or create a distinct pack if none exists.
+ * Legacy exports without a collection ID fall back to matching by label and type.
+ * `packCache` stores the result per import run so a pack is only looked up or
+ * created once when importing multiple documents from it.
  */
-async function resolveOrCreateWorldPack(type, label, packCache) {
-  const key = `${type}::${label}`;
+async function resolveOrCreateWorldPack(type, meta, packCache) {
+  const label = meta.label || "Import";
+  const collection = typeof meta.collection === "string" ? meta.collection : "";
+  const identity = collection || label;
+  const key = `${type}::${identity}`;
   if (packCache.has(key)) return packCache.get(key);
-  let pack = findLocalWorldPack(type, label);
+  let pack = findLocalWorldPack(type, meta);
   if (!pack) {
     const CompendiumCollectionCls = foundry.documents?.collections?.CompendiumCollection ?? CompendiumCollection;
+    const sourceName = collection.startsWith("world.")
+      ? collection.slice("world.".length)
+      : collection || label;
     pack = await CompendiumCollectionCls.createCompendium({
       type,
       label,
-      name: label.slugify({ strict: true })
+      name: sourceName.slugify({ strict: true }) || label.slugify({ strict: true })
     });
   }
   packCache.set(key, pack);
@@ -764,13 +767,12 @@ async function resolveOrCreateWorldPack(type, label, packCache) {
 }
 
 /**
- * Ordner-Hierarchie (nach Namen) innerhalb eines Kompendiums anlegen; Blatt-ID
- * zurückgeben. Analog zu `ensureFolderPath()`, aber kompendium-intern statt in
- * der Welt-Seitenleiste (`pack.folders` statt `game.folders`, Anlage per
- * `Folder.create({..}, {pack: pack.collection})`). Neu angelegte Ordner werden
- * von Foundry automatisch in `pack.folders` nachgeführt, sodass mehrere
- * Dokumente desselben Kompendiums im selben Import-Lauf sich denselben,
- * bereits angelegten Ordner teilen statt ihn mehrfach zu erzeugen.
+ * Create a folder hierarchy inside a compendium by name and return the leaf ID.
+ * Similar to `ensureFolderPath()`, but uses pack folders instead of the world
+ * sidebar (`pack.folders` instead of `game.folders`; created via
+ * `Folder.create({..}, {pack: pack.collection})`). Foundry adds new folders to
+ * `pack.folders`, so documents from the same compendium share folders created
+ * earlier in this import run instead of creating duplicates.
  */
 async function ensureCompendiumFolderPath(pack, names) {
   let parentId = null;
@@ -791,14 +793,14 @@ async function ensureCompendiumFolderPath(pack, names) {
 }
 
 /**
- * Baut die Export-Nutzdaten für ein einzelnes Kompendium-Dokument – analog zu
- * `buildExportJson`, aber mit eigenem Ordner-Schema (`compendia/<collection>`)
- * und Kompendium-Metadaten (Name + Typ) als Flag, damit der Import das richtige
- * Kompendium wiederfinden bzw. neu anlegen kann. Die kompendium-interne
- * Ordner-Hierarchie (Wurzel -> Blatt, per Namen) wird ebenfalls als Flag
- * mitgegeben, da die rohe Ordner-ID zu einem fremden Kompendium auf der
- * Zielinstallation gehört und daher nicht direkt wiederverwendbar ist
- * (siehe ensureCompendiumFolderPath / importCompendiumDataDoc).
+ * Build the export payload for one compendium document, similar to
+ * `buildExportJson` but using the `compendia/<collection>` path scheme and
+ * storing compendium metadata (collection ID, label, and type) in a flag so
+ * import can find or create the matching compendium. The internal folder
+ * hierarchy (root -> leaf, by name) is also stored as a flag because the raw
+ * folder ID belongs to a different compendium on the destination installation
+ * and cannot be reused directly (see ensureCompendiumFolderPath /
+ * importCompendiumDataDoc).
  */
 function buildCompendiumExportJson(doc, pack, flatten, withAssets) {
   const data = doc.toObject();
@@ -816,7 +818,7 @@ function buildCompendiumExportJson(doc, pack, flatten, withAssets) {
   return { folder: `compendia/${pack.collection}`, fileName, json, assetMap };
 }
 
-/** Mehrere Kompendium-Dokumente exportieren. `entries`: [{ doc, pack }]. */
+/** Export multiple compendium documents. `entries`: [{ doc, pack }]. */
 async function exportCompendiumDocuments(entries, opts = {}) {
   const withAssets = syncAssets();
   const flatten = opts.flattenAssets ?? exportFlattenAssets();
@@ -832,7 +834,7 @@ async function exportCompendiumDocuments(entries, opts = {}) {
   return pushExportBundle(jsonWrites, assetMap);
 }
 
-/** Sync-Status eines Kompendium-Dokuments gegenüber dem GitHub-Repo (siehe exportDeltaStatus). */
+/** Determine a compendium document's sync status against GitHub (see exportDeltaStatus). */
 async function compendiumExportDeltaStatus(doc, pack, tree, flatten, withAssets) {
   const { folder, fileName, json } = buildCompendiumExportJson(doc, pack, flatten, withAssets);
   const remoteSha = tree.get(`${folder}/${fileName}`);
@@ -841,7 +843,7 @@ async function compendiumExportDeltaStatus(doc, pack, tree, flatten, withAssets)
   return localSha === remoteSha ? "unchanged" : "changed";
 }
 
-/** Verfügbare Kompendium-Import-Einträge aus einem bereits geladenen Baum auflisten. */
+/** List available compendium import entries from an already loaded tree. */
 function listCompendiumImportEntriesFromTree(tree) {
   const prefix = "compendia/";
   return [...tree.keys()]
@@ -850,13 +852,14 @@ function listCompendiumImportEntriesFromTree(tree) {
 }
 
 /**
- * Sync-Status eines Kompendium-Import-Eintrags gegenüber dem lokalen Kompendium
- * ermitteln (siehe importDeltaStatus). `meta` sind die im Export hinterlegten
- * Kompendium-Metadaten (Typ + Anzeigename) aus `flags.<MODULE_ID>.compendium`.
+ * Determine the sync status of a compendium import entry against the local pack
+ * (see importDeltaStatus).
+ * `meta` contains the exported compendium metadata from
+ * `flags.<MODULE_ID>.compendium`.
  */
 async function compendiumImportDeltaStatus(meta, data, tree, entryValue, flatten, withAssets) {
   if (!data?._id || !meta?.type) return "new";
-  const pack = findLocalWorldPack(meta.type, meta.label);
+  const pack = findLocalWorldPack(meta.type, meta);
   if (!pack) return "new";
   const local = await pack.getDocument(data._id);
   if (!local) return "new";
@@ -867,11 +870,11 @@ async function compendiumImportDeltaStatus(meta, data, tree, entryValue, flatten
 }
 
 /**
- * Aus geladenen Daten ein Kompendium-Dokument anlegen bzw. aktualisieren.
- * Stellt zuvor die kompendium-interne Ordner-Hierarchie (per Namenspfad aus
- * `flags.<MODULE_ID>.compendium.folderPath`) im Ziel-Kompendium wieder her
- * bzw. legt sie neu an (siehe ensureCompendiumFolderPath) und setzt
- * `data.folder` auf die aufgelöste Blatt-Ordner-ID.
+ * Create or update a compendium document from loaded data.
+ * First restore or create its internal folder hierarchy in the destination
+ * pack using the name path from `flags.<MODULE_ID>.compendium.folderPath`
+ * (see ensureCompendiumFolderPath), then set `data.folder` to the resolved
+ * leaf folder ID.
  */
 async function importCompendiumDataDoc(pack, data) {
   const cls = getDocumentClass(pack.documentName);
@@ -896,9 +899,10 @@ async function importCompendiumDataDoc(pack, data) {
 }
 
 /**
- * Einen Kompendium-Import-Eintrag laden (inkl. Assets) und in das passende,
- * ggf. neu angelegte Welt-Kompendium importieren. `packCache` bündelt bereits
- * aufgelöste/angelegte Kompendien für den laufenden Import (siehe resolveOrCreateWorldPack).
+ * Load a compendium import entry (including assets) and import it into the
+ * matching world compendium, creating the pack if needed. `packCache` stores
+ * packs already resolved or created during this import
+ * (see resolveOrCreateWorldPack).
  */
 async function importCompendiumValue(value, tree, opts, packCache) {
   const withAssets = syncAssets();
@@ -911,15 +915,15 @@ async function importCompendiumValue(value, tree, opts, packCache) {
 
   const meta = foundry.utils.getProperty(data, `flags.${MODULE_ID}.compendium`) || {};
   if (!meta.type) throw new Error("Kompendium-Metadaten fehlen in dieser Export-Datei.");
-  const pack = await resolveOrCreateWorldPack(meta.type, meta.label || "Import", packCache);
+  const pack = await resolveOrCreateWorldPack(meta.type, meta, packCache);
   return importCompendiumDataDoc(pack, data);
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Dialoge                                                                    */
+/*  Dialogs                                                                    */
 /* -------------------------------------------------------------------------- */
 
-/** HTML-Sonderzeichen maskieren. */
+/** Escape HTML special characters. */
 function escHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;",
@@ -930,7 +934,7 @@ function escHtml(s) {
   })[c]);
 }
 
-/** Anzeige-Label für die Gruppierung nach (Sub-)Typ eines Dokuments. */
+/** Return the display label for grouping documents by their (sub)type. */
 function groupLabel(docType, sub) {
   if (!sub || sub === "base") return t("GOS.Dialog.GroupOther");
   const key = CONFIG?.[docType]?.typeLabels?.[sub];
@@ -941,7 +945,7 @@ function groupLabel(docType, sub) {
   return String(sub).charAt(0).toUpperCase() + String(sub).slice(1);
 }
 
-/** Checkbox „Nur Deltas anzeigen" – gemeinsam für Export- und Import-Dialog. */
+/** "Show deltas only" checkbox shared by the export and import dialogs. */
 function deltaFilterOptionHtml() {
   const checked = game.settings.get(MODULE_ID, "hideUnchanged");
   return `
@@ -951,7 +955,7 @@ function deltaFilterOptionHtml() {
     </label>`;
 }
 
-/** Options-Block für den Export-Dialog (Flatten-Checkbox + Delta-Filter). */
+/** Export dialog options (flatten checkbox and delta filter). */
 function exportOptionsHtml() {
   const flatten = exportFlattenAssets();
   return `
@@ -962,13 +966,13 @@ function exportOptionsHtml() {
     ${deltaFilterOptionHtml()}`;
 }
 
-/** Ausgewählte Export-Optionen aus dem Dialog lesen. */
+/** Read the selected export options from the dialog. */
 function readExportOptions(root) {
   const cb = root.querySelector(".gos-opt-flatten");
   return { flattenAssets: cb ? cb.checked : undefined };
 }
 
-/** Options-Block für den Import-Dialog (Asset-Zielordner + Ordner-Modus + Delta-Filter). */
+/** Import dialog options (asset destination, folder mode, and delta filter). */
 function importOptionsHtml() {
   const prefix = importAssetPrefix();
   const mode = importFolderMode();
@@ -995,7 +999,7 @@ function importOptionsHtml() {
     ${deltaFilterOptionHtml()}`;
 }
 
-/** Ausgewählte Import-Optionen aus dem Dialog lesen. */
+/** Read the selected import options from the dialog. */
 function readImportOptions(root) {
   return {
     assetPrefix: (root.querySelector(".gos-opt-assetprefix")?.value ?? "")
@@ -1007,8 +1011,8 @@ function readImportOptions(root) {
 }
 
 /**
- * Options-Block für den Kompendium-Import-Dialog (Asset-Zielordner + Delta-Filter).
- * Ohne Ordner-Modus, da Kompendium-Dokumente keinen Seitenleisten-Ordner haben.
+ * Compendium import dialog options (asset destination and delta filter).
+ * There is no folder mode because compendium documents have no sidebar folder.
  */
 function compendiumImportOptionsHtml() {
   const prefix = importAssetPrefix();
@@ -1052,7 +1056,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
       </label>`;
   };
 
-  // Einträge nach Gruppe bündeln (Reihenfolge alphabetisch, "Sonstige" ans Ende).
+  // Group entries alphabetically, with "Other" at the end.
   const otherLabel = t("GOS.Dialog.GroupOther");
   const groups = new Map();
   for (const e of entries) {
@@ -1083,19 +1087,18 @@ function buildCheckboxList(entries, optionsHtml = "") {
     })
     .join("");
 
-  // Das komplette Aussehen (nicht nur Layout, sondern auch Farben/Rahmen) wird
-  // direkt mit dem Dialog eingebettet statt aus der externen CSS-Datei bezogen.
-  // Grund: Externe Stylesheets waren in der Praxis nicht zuverlässig aktiv
-  // (Cache/Ladereihenfolge), wodurch der Dialog völlig ungestylt aussah. Für
-  // Farben wird zuerst ein einfacher rgba()-Wert gesetzt und danach – als
-  // Verbesserung, falls unterstützt – per color-mix() aus "currentColor"
-  // überschrieben, damit sich der Dialog an das aktive Theme anpasst, ohne
-  // dass ein fehlendes color-mix()-Support die Optik komplett unsichtbar macht.
+  // Embed all dialog styling (not only layout, but also colors and borders)
+  // instead of loading it from the external CSS file. External stylesheets
+  // were unreliable in practice (cache/load order), leaving the dialog
+  // completely unstyled. Set a basic rgba() color first, then override it
+  // with color-mix() based on currentColor when supported. This adapts the
+  // dialog to the active theme without making it invisible where color-mix()
+  // is unsupported.
   const style = `
     <style>
-      /* Ein einziger durchgehender Scrollbereich für das gesamte Fensterinhalt
-         (Suche, Toolbar UND Objektliste scrollen gemeinsam als eine Einheit),
-         statt nur die Liste intern scrollen zu lassen. */
+      /* Use one continuous scroll area for the entire window content so the
+         search, toolbar, and object list scroll together instead of scrolling
+         only the list internally. */
       .gos-dialog {
         display: flex;
         flex-direction: column;
@@ -1143,7 +1146,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
         border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
         border-radius: 4px; padding: 4px 6px;
       }
-      /* Trennlinie zwischen Options-Zeilen und "Alle auswählen" (nur bei vorhandenen Optionen). */
+      /* Separator between option rows and "Select all" (only when options exist). */
       .gos-dialog .gos-toolbar .gos-opt ~ .gos-selectall {
         padding-top: 8px; margin-top: 2px;
         border-top: 1px solid rgba(127, 127, 127, 0.25);
@@ -1152,7 +1155,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
 
       .gos-dialog input[type="checkbox"] { accent-color: currentColor; }
 
-      /* Sektionstrenner zwischen Toolbar und Objektliste. */
+      /* Section separator between the toolbar and object list. */
       .gos-dialog .gos-divider {
         height: 2px; margin: 0 2px; flex: 0 0 auto; border-radius: 1px;
         background: rgba(127, 127, 127, 0.4);
@@ -1164,7 +1167,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
       .gos-dialog .gos-group { margin: 0 0 4px; overflow: hidden; }
       .gos-dialog .gos-group .gos-list { padding: 5px 6px 7px; }
 
-      /* Gruppen-Kopf: deutlich als Überschrift erkennbar (größer, fett,       */
+      /* Group heading: clearly distinguish it as a heading (larger, bold,     */
       /* eigener Hintergrund + farbiger Akzentbalken links). */
       .gos-dialog .gos-group > summary {
         display: flex; align-items: center; gap: 8px; padding: 8px 10px;
@@ -1221,7 +1224,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
       .gos-dialog .gos-name { font-weight: 600; }
       .gos-dialog .gos-desc { font-size: 0.8em; opacity: 0.7; }
 
-      /* Sync-Status-Badges (neu/geändert/unverändert) neben dem Objektnamen. */
+      /* Sync status badges (new/changed/unchanged) next to the document name. */
       .gos-dialog .gos-badge {
         display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px;
         font-size: 0.75em; font-weight: 700; vertical-align: middle; white-space: nowrap;
@@ -1239,12 +1242,12 @@ function buildCheckboxList(entries, optionsHtml = "") {
       .gos-dialog .gos-hidden { display: none !important; }
       .gos-dialog .gos-empty { padding: 12px; text-align: center; font-style: italic; opacity: 0.6; }
 
-      /* DialogV2 fügt zwischen ".window-content" und unserem Inhalt automatisch
-         ein "form.dialog-form.standard-form" und ein "div.dialog-content.standard-form"
-         ein. Beide sind standardmäßig Flex-Spalten mit "min-height: auto" und
-         "overflow: visible" - das unterbricht die Flex-Kette, wodurch weder die
-         Fenstergröße begrenzt noch unser innerer Scrollbereich (".gos-scroll")
-         wirksam wird. Daher müssen wir die gesamte Kette explizit durchreichen. */
+      /* DialogV2 automatically inserts a "form.dialog-form.standard-form" and
+         a "div.dialog-content.standard-form" between ".window-content" and our
+         content. Both are flex columns by default with "min-height: auto" and
+         "overflow: visible", which breaks the flex chain and prevents both
+         window sizing and our inner ".gos-scroll" area from working. Explicitly
+         pass sizing through the entire chain. */
       .git-object-sync-dialog .window-content,
       .git-object-sync-dialog .window-content .dialog-form,
       .git-object-sync-dialog .window-content .dialog-content {
@@ -1258,11 +1261,10 @@ function buildCheckboxList(entries, optionsHtml = "") {
         padding: 10px 12px 12px;
       }
 
-      /* Foundrys eingebautes Resize-Handle-Icon (ein winziges 11x11px
-         Hintergrundbild) ist je nach Theme/System kaum zu erkennen. Wir
-         zeichnen daher zusätzlich einen eigenen, garantiert sichtbaren
-         Grip-Indikator (diagonale Streifen in der Ecke) rein per CSS,
-         unabhängig vom Bild-Asset. */
+      /* Foundry's built-in resize handle icon (a tiny 11x11px background image)
+         can be hard to see depending on the theme/system. Add a separate,
+         reliably visible grip indicator (diagonal stripes in the corner) using
+         CSS only, independent of the image asset. */
       .git-object-sync-dialog .window-resize-handle {
         width: 15px;
         height: 15px;
@@ -1303,7 +1305,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
     </div>`;
 }
 
-/** Bild-URL für die Vorschau (externe URLs/Data-URLs unverändert, sonst geroutet). */
+/** Preview image URL: leave external/data URLs unchanged and route other paths. */
 function thumbUrl(img) {
   if (!img) return null;
   if (/^(https?:|data:)/i.test(img)) return img;
@@ -1314,7 +1316,7 @@ function thumbUrl(img) {
   }
 }
 
-/** Erstes sinnvolles Vorschaubild aus einem Dokument/Datenobjekt wählen. */
+/** Select the first useful preview image from a document/data object. */
 function pickImg(o) {
   return (
     o?.img ||
@@ -1325,7 +1327,7 @@ function pickImg(o) {
   );
 }
 
-/** Kurze, HTML-freie Beschreibung aus verbreiteten System-Feldern ableiten. */
+/** Build a short, HTML-free description from common system fields. */
 function docSummary(o) {
   const raw =
     o?.system?.description?.value ??
@@ -1347,10 +1349,10 @@ function wireSelectAll(dialogElement) {
   const root = dialogElement?.element ?? dialogElement;
   if (!root || typeof root.querySelector !== "function") return;
 
-  // Kaputte/fehlende Vorschaubilder ersetzen. Beim Import kann die im JSON
-  // gespeicherte Bild-Referenz (bei "Sammelordner"-Export) auf keinen lokal
-  // erreichbaren Pfad mehr zeigen – dann erst den Blob aus dem GitHub-Baum als
-  // data:-URI probieren, bevor endgültig ein Platzhalter-Icon angezeigt wird.
+  // Replace broken/missing preview images. During import, the image reference
+  // stored in the JSON (for a shared-folder export) may no longer point to a
+  // locally reachable path. Try the blob from the GitHub tree as a data URI
+  // before falling back to a placeholder icon.
   root.querySelectorAll("img.gos-thumb").forEach((img) => {
     img.addEventListener("error", async () => {
       const stage = Number(img.dataset.gosStage || 0);
@@ -1376,17 +1378,16 @@ function wireSelectAll(dialogElement) {
   const all = root.querySelector(".gos-select-all");
   if (all) {
     all.addEventListener("change", () => {
-      // Nur aktuell sichtbare (nicht weggefilterte) Einträge umschalten.
+      // Toggle only currently visible (not filtered out) entries.
       root.querySelectorAll('input[name="gos"]').forEach((cb) => {
         if (!isHidden(cb)) cb.checked = all.checked;
       });
     });
   }
 
-  // Kombinierter Filter: Live-Suche (Name/Beschreibung) UND Delta-Filter
-  // (unveränderte Objekte ausblenden), Zeilen die durch einen der beiden
-  // Filter nicht passen werden ausgeblendet; leere Gruppen werden mit
-  // ausgeblendet, ebenso erscheint bei "keine Treffer" ein Hinweistext.
+  // Combine live search (name/description) with the delta filter (hide
+  // unchanged objects). Hide rows that fail either filter, hide empty groups,
+  // and show a message when there are no matches.
   const search = root.querySelector(".gos-search-input");
   const deltaFilter = root.querySelector(".gos-opt-deltafilter");
   if (search || deltaFilter) {
@@ -1407,7 +1408,7 @@ function wireSelectAll(dialogElement) {
       for (const g of groups) {
         const groupHasMatch = g.querySelector(".gos-row:not(.gos-hidden)") !== null;
         g.classList.toggle("gos-hidden", !groupHasMatch);
-        if (q && groupHasMatch) g.open = true; // bei Suche passende Gruppen aufklappen
+        if (q && groupHasMatch) g.open = true; // Expand matching groups during search.
       }
       if (empty) empty.classList.toggle("gos-hidden", anyVisible);
     };
@@ -1425,9 +1426,9 @@ function readSelected(dialogElement) {
 }
 
 /**
- * Auswahl-Dialog anzeigen. Nutzt DialogV2, wenn verfügbar, und fällt sonst
- * (oder bei einem Fehler) auf den klassischen Dialog zurück. `onConfirm`
- * erhält das Wurzel-HTMLElement des Dialoginhalts.
+ * Show a selection dialog. Use DialogV2 when available, falling back to the
+ * classic dialog otherwise or if an error occurs. `onConfirm` receives the
+ * root HTMLElement of the dialog content.
  */
 async function openSelectionDialog({ title, content, confirmLabel, confirmIcon, onConfirm }) {
   const DV2 = foundry.applications?.api?.DialogV2;
@@ -1457,12 +1458,11 @@ async function openSelectionDialog({ title, content, confirmLabel, confirmIcon, 
     }
   }
 
-  // Fallback: klassischer Dialog (V1). Dieser ist seit v12 als deprecated
-  // markiert und laut Foundry-Roadmap für die Entfernung in v14 vorgesehen.
-  // Wir greifen daher zuerst auf den bereits ins "appv1"-Namespace verschobenen
-  // Verweis zurück und erst danach auf den globalen Bezeichner - so stürzt der
-  // Code nicht mit einem harten ReferenceError ab, sobald "Dialog" irgendwann
-  // entfernt wird, sondern zeigt stattdessen eine verständliche Fehlermeldung.
+  // Fallback: classic dialog (V1). It has been deprecated since v12 and is
+  // scheduled for removal in v14 according to the Foundry roadmap. Prefer the
+  // reference already moved into the "appv1" namespace, then try the global
+  // identifier. This avoids a ReferenceError if "Dialog" is removed and lets
+  // us show a clear error message instead.
   const DialogV1 = foundry.appv1?.api?.Dialog ?? (typeof Dialog !== "undefined" ? Dialog : null);
   if (!DialogV1) {
     ui.notifications.error(
@@ -1493,15 +1493,15 @@ async function openSelectionDialog({ title, content, confirmLabel, confirmIcon, 
   });
 }
 
-/** Export-Dialog für einen Dokumenttyp öffnen. */
+/** Open the export dialog for a document type. */
 async function openExportDialog(type) {
   const cfg = TYPE_CONFIG[type];
   const label = game.i18n.localize(`DOCUMENT.${type}`) || type;
   const docs = cfg.collection().contents.sort((a, b) => a.name.localeCompare(b.name));
 
-  // Repo-Baum laden, um den Sync-Status (neu/geändert/unverändert) je Objekt
-  // zu bestimmen. Schlägt das fehl (z. B. ungültiges Token), wird ohne Status
-  // fortgefahren – der Dialog bleibt trotzdem nutzbar, nur ohne Badges/Filter.
+  // Load the repository tree to determine each object's sync status
+  // (new/changed/unchanged). If this fails (e.g. an invalid token), continue
+  // without status data; the dialog remains usable but has no badges/filter.
   let tree = null;
   try {
     tree = await githubTree();
@@ -1550,10 +1550,10 @@ async function openExportDialog(type) {
 }
 
 /**
- * Export-Dialog für alle Welt-Kompendien öffnen. Anders als bei den übrigen
- * Typen gibt es hier keinen einzelnen Dokumenttyp – stattdessen werden alle
- * Objekte aller Welt-Kompendien in einer gemeinsamen, nach Kompendium
- * gruppierten Liste angeboten (Auswahlwert "<pack.collection>::<id>").
+ * Open the export dialog for all world compendiums. Unlike other types, there
+ * is no single document type here; instead, all documents from all world
+ * compendiums are shown in one list grouped by compendium
+ * (selection value "<pack.collection>::<id>").
  */
 async function openCompendiumExportDialog() {
   const label = t("GOS.Dialog.CompendiaLabel");
@@ -1620,12 +1620,11 @@ async function openCompendiumExportDialog() {
 }
 
 /**
- * Vorschaubild-Infos für einen Import-Eintrag ermitteln. Die im JSON gespeicherte
- * Referenz (`rawImg`) kann beim Export in einen Sammelordner umgeschrieben worden
- * sein (`exportFlattenAssets`) und zeigt dann auf keinen lokal existierenden Pfad
- * mehr – bis das Asset tatsächlich importiert wurde. Für die Vorschau wird daher
- * zusätzlich die SHA des Blobs im Repo-Baum (`assets/<referenz>`) mitgegeben, aus
- * der bei Bedarf eine data:-URI gebaut wird.
+ * Determine preview image information for an import entry. The reference
+ * (`rawImg`) stored in the JSON may have been rewritten to a shared folder
+ * during export (`exportFlattenAssets`), so it may not point to a local path
+ * until the asset has been imported. Include the blob SHA from the repository
+ * tree (`assets/<reference>`) so a data URI can be created for the preview.
  */
 function buildImportImgInfo(rawImg, tree) {
   const img = thumbUrl(rawImg);
@@ -1638,7 +1637,7 @@ function buildImportImgInfo(rawImg, tree) {
   return info;
 }
 
-/** Import-Dialog für einen Dokumenttyp öffnen. */
+/** Open the import dialog for a document type. */
 async function openImportDialog(type) {
   const label = game.i18n.localize(`DOCUMENT.${type}`) || type;
   const items = await listImportEntries(type);
@@ -1647,7 +1646,7 @@ async function openImportDialog(type) {
     return ui.notifications.warn(t("GOS.Dialog.NothingToImport"));
   }
 
-  // Vorschaudaten (Name, Bild, Beschreibung) laden. tree wird wiederverwendet.
+  // Load preview data (name, image, description). Reuse the tree.
   const tree = await githubTree();
   const withAssets = syncAssets();
   const flatten = exportFlattenAssets();
@@ -1710,10 +1709,10 @@ async function openImportDialog(type) {
 }
 
 /**
- * Import-Dialog für alle Welt-Kompendien öffnen. Zeigt alle im Repo unter
- * `compendia/` gefundenen Einträge in einer nach Kompendium-Anzeigename
- * gruppierten Liste; das Ziel-Kompendium wird beim eigentlichen Import pro
- * Eintrag anhand der gespeicherten Metadaten aufgelöst bzw. neu angelegt.
+ * Open the import dialog for all world compendiums. Show all entries found
+ * under `compendia/` in the repository, grouped by compendium display name.
+ * During import, resolve or create the destination pack for each entry using
+ * its stored metadata.
  */
 async function openCompendiumImportDialog() {
   const label = t("GOS.Dialog.CompendiaLabel");
@@ -1768,7 +1767,7 @@ async function openCompendiumImportDialog() {
       if (!values.length) return ui.notifications.warn(t("GOS.Dialog.NothingSelected"));
       const opts = readImportOptions(root);
       let count = 0;
-      const packCache = new Map(); // "<Typ>::<Label>" -> aufgelöstes/angelegtes Kompendium (pro Lauf)
+      const packCache = new Map(); // "<type>::<collection-or-label>" -> resolved/created pack per run.
       const progress = makeProgress(t("GOS.Progress.Importing"));
       for (let i = 0; i < values.length; i++) {
         progress.update(i / values.length);
@@ -1791,11 +1790,12 @@ async function openCompendiumImportDialog() {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Liest die Dokument-ID aus dem Kontextmenü-Zielelement. Foundry v12 übergibt ein
- * jQuery-Objekt (`li.data(...)`/`li.attr(...)`), v13 dagegen ein natives HTMLElement
- * ohne jQuery-Methoden (`ContextMenu` wird dort mit `{jQuery: false}` konstruiert,
- * siehe document-directory.mjs). `.closest()` fängt zusätzlich ab, falls das Element
- * selbst (statt eines Kind-Elements) das Ziel ist - closest() matched auch sich selbst.
+ * Read the document ID from the context-menu target element. Foundry v12 passes
+ * a jQuery object (`li.data(...)`/`li.attr(...)`), while v13 passes a native
+ * HTMLElement without jQuery methods (`ContextMenu` is created with
+ * `{jQuery: false}` there; see document-directory.mjs). `.closest()` also handles
+ * cases where the element itself, rather than a child, is the target; closest()
+ * matches the element itself too.
  */
 function contextMenuDocumentId(li) {
   const el = li?.jquery ? li[0] : li;
@@ -1803,7 +1803,7 @@ function contextMenuDocumentId(li) {
   return row?.dataset?.documentId ?? row?.dataset?.entryId ?? row?.getAttribute?.("data-document-id") ?? row?.getAttribute?.("data-entry-id");
 }
 
-/** Kontextmenü-Eintrag "Export nach Git" für ein einzelnes Objekt. */
+/** Add the "Export to Git" context-menu entry for one document. */
 function addContextMenuEntry(type, entryOptions) {
   const cfg = TYPE_CONFIG[type];
   entryOptions.push({
@@ -1826,8 +1826,8 @@ function addContextMenuEntry(type, entryOptions) {
 }
 
 /**
- * Export/Import-Buttons in eine Verzeichnis-Kopfzeile einfügen. Gemeinsame
- * Basis für die Welt-Dokument-Verzeichnisse und die Kompendium-Seitenleiste.
+ * Add export/import buttons to a directory header. Shared by world document
+ * directories and the compendium sidebar.
  */
 function injectActionButtons(html, onExport, onImport) {
   if (!game.user.isGM) return;
@@ -1860,12 +1860,12 @@ function injectActionButtons(html, onExport, onImport) {
   header.appendChild(wrap);
 }
 
-/** Export/Import-Buttons oben in der jeweiligen Verzeichnis-Seitenleiste (Welt-Dokumente). */
+/** Add export/import buttons to a world-document directory sidebar header. */
 function injectDirectoryButtons(type, html) {
   injectActionButtons(html, () => openExportDialog(type), () => openImportDialog(type));
 }
 
-/** Export/Import-Buttons oben in der Kompendium-Seitenleiste (Welt-Kompendien). */
+/** Add export/import buttons to the world-compendium sidebar header. */
 function injectCompendiumButtons(html) {
   injectActionButtons(html, () => openCompendiumExportDialog(), () => openCompendiumImportDialog());
 }
@@ -1971,35 +1971,35 @@ Hooks.once("init", () => {
   });
 });
 
-// Kontextmenü- und Render-Hooks bereits im "setup" registrieren – also bevor
-// die Seitenleisten-Verzeichnisse zum ersten Mal gerendert werden. Würden sie
-// erst im "ready" registriert, fehlte der Kontextmenü-Eintrag bei Verzeichnissen,
-// die schon gerendert wurden (z. B. der standardmäßig offene Actors-Tab).
+// Register context-menu and render hooks during "setup", before the sidebar
+// directories are rendered for the first time. Registering them only in
+// "ready" would miss directories that have already rendered (e.g. the
+// Actors tab, which is open by default).
 Hooks.once("setup", () => {
   for (const [type, cfg] of Object.entries(TYPE_CONFIG)) {
-    // Beide Kontextmenü-Hook-Namen registrieren (v12 + v13, siehe TYPE_CONFIG-Kommentar) -
-    // pro Foundry-Version feuert ohnehin nur einer der beiden, also kein Doppel-Eintrag.
+    // Register both context-menu hook names (v12 and v13; see TYPE_CONFIG).
+    // Only one hook fires per Foundry version, so this cannot add duplicate entries.
     Hooks.on(cfg.contextHook, (html, entryOptions) => addContextMenuEntry(type, entryOptions));
     Hooks.on(cfg.contextHookV13, (html, entryOptions) => addContextMenuEntry(type, entryOptions));
     Hooks.on(cfg.renderHook, (app, html) => injectDirectoryButtons(type, html));
   }
-  // Kompendium-Seitenleiste: eigener Render-Hook, da Kompendien kein Element von
-  // TYPE_CONFIG sind (ein Kompendium-Pack ist kein einzelnes Dokument, sondern
-  // ein Container für viele Dokumente unterschiedlichen Typs).
+  // The compendium sidebar needs its own render hook because compendiums are
+  // not part of TYPE_CONFIG: a compendium pack is a container for many
+  // documents, not a single document.
   Hooks.on("renderCompendiumDirectory", (app, html) => injectCompendiumButtons(html));
 });
 
 Hooks.once("ready", () => {
-  // Bereits gerenderte Verzeichnisse nachrüsten: Die Seitenleisten-Tabs werden
-  // vor diesem "ready"-Hook einmalig dargestellt, wodurch der renderHook für sie
-  // nicht mehr feuert. Ohne dies fehlten die Buttons auf den offenen Tabs.
+  // Patch directories that have already rendered. Sidebar tabs render once
+  // before this "ready" hook, so their render hooks will not fire again.
+  // Without this, buttons would be missing from already-open tabs.
   for (const [type, cfg] of Object.entries(TYPE_CONFIG)) {
     const app = ui[cfg.uiKey];
     if (app?.element) injectDirectoryButtons(type, app.element);
   }
   if (ui.compendium?.element) injectCompendiumButtons(ui.compendium.element);
 
-  // Öffentliche API, z. B. für eigene Makros.
+  // Public API, e.g. for custom macros.
   const mod = game.modules.get(MODULE_ID);
   if (mod) {
     mod.api = {

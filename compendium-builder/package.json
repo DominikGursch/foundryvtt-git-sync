@@ -1,9 +1,9 @@
 {
-  "name": "git-object-sync-compendium-builder",
+  "name": "foundry-git-sync-compendium-builder",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "CI-Hilfswerkzeug: baut aus den von 'Git Object Sync' flach exportierten JSON-Dateien (actors/, items/, scenes/, journal/, compendia/<pack>/) echte, installierbare FoundryVTT-Kompendien (LevelDB-Packs).",
+  "description": "CI helper: builds installable FoundryVTT compendiums (LevelDB packs) from flat JSON exports created by Foundry Git Sync.",
   "scripts": {
     "build": "node build-packs.mjs"
   },
