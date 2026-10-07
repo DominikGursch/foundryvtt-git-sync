@@ -666,8 +666,132 @@ async function restoreAssetsGithub(data, tree, prefix = "") {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Version compatibility                                                      */
+/* -------------------------------------------------------------------------- */
+/*  Exports contain the raw source data of the exporting installation plus    */
+/*  `_stats` metadata (coreVersion, systemId, systemVersion). Foundry can     */
+/*  migrate older data forward (`migrateDataSafe`), but there is no backward  */
+/*  migration, and data from another game system does not fit the local      */
+/*  system schema. Imports are therefore checked before anything is written. */
+/* -------------------------------------------------------------------------- */
+
+/** Document types whose `system` data depends on the active game system. */
+const SYSTEM_DATA_TYPES = new Set(["Actor", "Item"]);
+
+/** Shorten a version string to its first `parts` dot-separated components. */
+function versionPrefix(version, parts) {
+  return String(version ?? "").split(".").slice(0, parts).join(".");
+}
+
+/**
+ * Compare the `_stats` metadata of exported data with this installation.
+ * Returns `{ level, reasons }` where `level` is one of:
+ * - "blocked": data from a newer Foundry generation, a newer system
+ *   major/minor version, or (for Actors/Items) another game system;
+ * - "older": data from an older Foundry generation or system version (or,
+ *   for Scenes/Journals, another system); Foundry migrates it on import, but
+ *   system world-migration scripts do not run;
+ * - "unknown": no version metadata available;
+ * - "ok": same Foundry generation and system version.
+ */
+function checkImportCompatibility(type, data) {
+  const stats = data?._stats ?? {};
+  const str = (v) => (typeof v === "string" || typeof v === "number" ? String(v) : "");
+  const coreVersion = str(stats.coreVersion);
+  const systemId = str(stats.systemId);
+  const systemVersion = str(stats.systemVersion);
+  const isNewer = foundry.utils.isNewerVersion;
+  const localGeneration = String(game.release?.generation ?? versionPrefix(game.version, 1));
+  const localSystemId = game.system.id;
+  const localSystemVersion = String(game.system.version ?? "");
+
+  if (!coreVersion) return { level: "unknown", reasons: [t("GOS.Compat.Unknown")] };
+
+  const blocked = [];
+  const older = [];
+  const sourceGeneration = versionPrefix(coreVersion, 1);
+  if (isNewer(sourceGeneration, localGeneration)) {
+    blocked.push(t("GOS.Compat.NewerCore", { source: coreVersion, target: game.version }));
+  } else if (isNewer(localGeneration, sourceGeneration)) {
+    older.push(t("GOS.Compat.OlderCore", { source: coreVersion, target: game.version }));
+  }
+
+  const sameSystem = !systemId || systemId === localSystemId;
+  if (!sameSystem) {
+    const msg = t("GOS.Compat.OtherSystem", { source: systemId, target: localSystemId });
+    (SYSTEM_DATA_TYPES.has(type) ? blocked : older).push(msg);
+  } else if (systemVersion && localSystemVersion) {
+    const fmt = { source: systemVersion, target: localSystemVersion };
+    if (isNewer(versionPrefix(systemVersion, 2), versionPrefix(localSystemVersion, 2))) {
+      blocked.push(t("GOS.Compat.NewerSystem", fmt));
+    } else if (isNewer(localSystemVersion, systemVersion)) {
+      older.push(t("GOS.Compat.OlderSystem", fmt));
+    } else if (isNewer(systemVersion, localSystemVersion)) {
+      // Newer patch release of the same major/minor version: allowed, but flagged.
+      older.push(t("GOS.Compat.NewerSystemPatch", fmt));
+    }
+  }
+
+  if (blocked.length) return { level: "blocked", reasons: blocked };
+  if (older.length) return { level: "older", reasons: older };
+  return { level: "ok", reasons: [] };
+}
+
+/** Throw if the data must not be imported into this installation. */
+function assertImportCompatible(type, data) {
+  const compat = checkImportCompatibility(type, data);
+  if (compat.level === "blocked") {
+    throw new Error(`${data?.name ?? data?._id ?? "?"}: ${compat.reasons.join(" ")}`);
+  }
+  return compat;
+}
+
+/**
+ * Migrate source data to the local data schema before it is written.
+ * `migrateDataSafe` applies Foundry core migrations and the `migrateData`
+ * hooks of the active system's data models, including embedded documents.
+ * It is called explicitly because `update()` does not reliably migrate the
+ * replacement data the way document construction in `create()` does.
+ */
+function migrateImportData(type, data) {
+  const cls = getDocumentClass(type);
+  if (typeof cls?.migrateDataSafe === "function") cls.migrateDataSafe(data);
+  return data;
+}
+
+/** Show a yes/no dialog; resolve to true only if the user confirms. */
+async function confirmDialog(title, content) {
+  const DV2 = foundry.applications?.api?.DialogV2;
+  if (DV2?.confirm) {
+    return (await DV2.confirm({ window: { title }, content, rejectClose: false, modal: true })) === true;
+  }
+  return (await Dialog.confirm({ title, content })) === true;
+}
+
+/**
+ * Apply the compatibility check to a dialog selection: skip blocked entries
+ * and ask for confirmation (with a backup hint) if older or unversioned data
+ * is selected. Returns the values that may be imported.
+ */
+async function filterImportSelection(values, compatByValue) {
+  const level = (v) => compatByValue.get(v)?.level;
+  const blocked = values.filter((v) => level(v) === "blocked");
+  const allowed = values.filter((v) => level(v) !== "blocked");
+  if (blocked.length) ui.notifications.error(t("GOS.Compat.SkippedBlocked", { count: blocked.length }));
+  const warned = allowed.filter((v) => level(v) === "older" || level(v) === "unknown");
+  if (!warned.length) return allowed;
+  const ok = await confirmDialog(
+    t("GOS.Compat.ConfirmTitle"),
+    `<p>${escHtml(t("GOS.Compat.ConfirmText", { count: warned.length }))}</p>`
+  );
+  return ok ? allowed : [];
+}
+
 /** Create or update a document from loaded data. */
 async function importDataDoc(type, data, folderOpts = {}) {
+  assertImportCompatible(type, data);
+  migrateImportData(type, data);
   const cls = getDocumentClass(type);
   const collection = TYPE_CONFIG[type].collection();
   const existing = data._id ? collection.get(data._id) : null;
@@ -705,6 +829,8 @@ async function importValue(type, value, tree = null, opts = {}) {
   const sha = (tree ?? (await githubTree())).get(value);
   if (!sha) throw new Error(`Nicht im Repo: ${value}`);
   const data = JSON.parse(new TextDecoder().decode(await githubReadBlob(sha)));
+  // Check before restoring assets so nothing is written for blocked data.
+  assertImportCompatible(type, data);
   if (withAssets) await restoreAssetsGithub(data, tree ?? (await githubTree()), prefix);
   // After restoring assets, update references to point to the destination.
   rewriteAssetPaths(data, prefix);
@@ -877,6 +1003,8 @@ async function compendiumImportDeltaStatus(meta, data, tree, entryValue, flatten
  * leaf folder ID.
  */
 async function importCompendiumDataDoc(pack, data) {
+  assertImportCompatible(pack.documentName, data);
+  migrateImportData(pack.documentName, data);
   const cls = getDocumentClass(pack.documentName);
   const existing = data._id ? await pack.getDocument(data._id) : null;
   const overwrite = game.settings.get(MODULE_ID, "overwriteImport");
@@ -910,11 +1038,13 @@ async function importCompendiumValue(value, tree, opts, packCache) {
   const sha = tree.get(value);
   if (!sha) throw new Error(`Nicht im Repo: ${value}`);
   const data = JSON.parse(new TextDecoder().decode(await githubReadBlob(sha)));
+  const meta = foundry.utils.getProperty(data, `flags.${MODULE_ID}.compendium`) || {};
+  if (!meta.type) throw new Error("Kompendium-Metadaten fehlen in dieser Export-Datei.");
+  // Check before restoring assets so nothing is written for blocked data.
+  assertImportCompatible(meta.type, data);
   if (withAssets) await restoreAssetsGithub(data, tree, prefix);
   rewriteAssetPaths(data, prefix);
 
-  const meta = foundry.utils.getProperty(data, `flags.${MODULE_ID}.compendium`) || {};
-  if (!meta.type) throw new Error("Kompendium-Metadaten fehlen in dieser Export-Datei.");
   const pack = await resolveOrCreateWorldPack(meta.type, meta, packCache);
   return importCompendiumDataDoc(pack, data);
 }
@@ -1033,6 +1163,11 @@ function buildCheckboxList(entries, optionsHtml = "") {
     changed: t("GOS.Dialog.StatusChanged"),
     unchanged: t("GOS.Dialog.StatusUnchanged")
   };
+  const compatLabels = {
+    blocked: t("GOS.Compat.BadgeBlocked"),
+    older: t("GOS.Compat.BadgeOlder"),
+    unknown: t("GOS.Compat.BadgeUnknown")
+  };
 
   const rowHtml = (e) => {
     const fallbackAttrs = e.ghSha ? ` data-gh-sha="${esc(e.ghSha)}" data-mime="${esc(e.mime || "image/png")}"` : "";
@@ -1045,12 +1180,16 @@ function buildCheckboxList(entries, optionsHtml = "") {
     const badge = status
       ? `<span class="gos-badge gos-badge--${status}">${esc(statusLabels[status] ?? status)}</span>`
       : "";
+    const compatLevel = e.compat?.level;
+    const compatBadge = compatLevel && compatLevel !== "ok"
+      ? `<span class="gos-badge gos-badge--compat-${esc(compatLevel)}" title="${esc(e.compat.reasons.join("\n"))}">${esc(compatLabels[compatLevel] ?? compatLevel)}</span>`
+      : "";
     return `
       <label class="gos-row" data-search="${search}" data-status="${esc(status || "")}">
         <input type="checkbox" name="gos" value="${esc(e.value)}"/>
         ${thumb}
         <span class="gos-text">
-          <span class="gos-name">${esc(e.label)} ${badge}</span>
+          <span class="gos-name">${esc(e.label)} ${badge}${compatBadge}</span>
           ${desc}
         </span>
       </label>`;
@@ -1237,6 +1376,14 @@ function buildCheckboxList(entries, optionsHtml = "") {
       }
       .gos-dialog .gos-badge--unchanged {
         background: rgba(127, 127, 127, 0.22); color: inherit; opacity: 0.7;
+      }
+      /* Version compatibility badges (see checkImportCompatibility). */
+      .gos-dialog .gos-badge--compat-blocked {
+        background: rgba(244, 67, 54, 0.22); color: #f44336; cursor: help;
+      }
+      .gos-dialog .gos-badge--compat-older,
+      .gos-dialog .gos-badge--compat-unknown {
+        background: rgba(255, 193, 7, 0.22); color: #ffc107; cursor: help;
       }
 
       .gos-dialog .gos-hidden { display: none !important; }
@@ -1675,11 +1822,13 @@ async function openImportDialog(type) {
         ...buildImportImgInfo(pickImg(data ?? {}), tree),
         desc: docSummary(data ?? {}),
         group: groupLabel(type, data?.type),
-        status
+        status,
+        compat: data ? checkImportCompatibility(type, data) : null
       };
     })
   );
   loadProgress.done();
+  const compatByValue = new Map(entries.map((e) => [e.value, e.compat]));
 
   await openSelectionDialog({
     title: t("GOS.Dialog.ImportTitle", { label }),
@@ -1687,9 +1836,11 @@ async function openImportDialog(type) {
     confirmLabel: t("GOS.Dialog.ImportButton"),
     confirmIcon: "fa-solid fa-download",
     onConfirm: async (root) => {
-      const values = readSelected(root);
-      if (!values.length) return ui.notifications.warn(t("GOS.Dialog.NothingSelected"));
+      const selected = readSelected(root);
+      if (!selected.length) return ui.notifications.warn(t("GOS.Dialog.NothingSelected"));
       const opts = readImportOptions(root);
+      const values = await filterImportSelection(selected, compatByValue);
+      if (!values.length) return;
       let count = 0;
       const progress = makeProgress(t("GOS.Progress.Importing"));
       for (let i = 0; i < values.length; i++) {
@@ -1751,11 +1902,13 @@ async function openCompendiumImportDialog() {
         ...buildImportImgInfo(pickImg(data ?? {}), tree),
         desc: docSummary(data ?? {}),
         group: meta?.label || t("GOS.Dialog.GroupOther"),
-        status
+        status,
+        compat: data && meta?.type ? checkImportCompatibility(meta.type, data) : null
       };
     })
   );
   loadProgress.done();
+  const compatByValue = new Map(entries.map((e) => [e.value, e.compat]));
 
   await openSelectionDialog({
     title: t("GOS.Dialog.ImportTitle", { label }),
@@ -1763,9 +1916,11 @@ async function openCompendiumImportDialog() {
     confirmLabel: t("GOS.Dialog.ImportButton"),
     confirmIcon: "fa-solid fa-download",
     onConfirm: async (root) => {
-      const values = readSelected(root);
-      if (!values.length) return ui.notifications.warn(t("GOS.Dialog.NothingSelected"));
+      const selected = readSelected(root);
+      if (!selected.length) return ui.notifications.warn(t("GOS.Dialog.NothingSelected"));
       const opts = readImportOptions(root);
+      const values = await filterImportSelection(selected, compatByValue);
+      if (!values.length) return;
       let count = 0;
       const packCache = new Map(); // "<type>::<collection-or-label>" -> resolved/created pack per run.
       const progress = makeProgress(t("GOS.Progress.Importing"));
