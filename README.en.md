@@ -235,8 +235,17 @@ Works on the same instance (e.g. after an error) or on a different Foundry
 installation.
 
 1. Click the **"Git Import …" button**.
-2. Check off the desired files → import. Referenced images/maps are
+2. Under **Import destination**, select the world, an unlocked world compendium
+   of the matching type, or **New world compendium …**. Compendium imports restore
+   the original folder paths inside the pack; **Overwrite on import** updates
+   existing documents with the same ID.
+3. Check off the desired files → import. Referenced images/maps are
    automatically restored along with them.
+
+The **Target folder for assets** is a prefix relative to Foundry user data.
+For example, `worlds/cyberpunk-red/custom/Items` places `Item/Bungee_Cord.png`
+at `worlds/cyberpunk-red/custom/Items/Item/Bungee_Cord.png`. An empty prefix
+keeps `Item/Bungee_Cord.png` directly under user data.
 
 The module reads the current state directly from GitHub on import – no
 manual refresh is needed.

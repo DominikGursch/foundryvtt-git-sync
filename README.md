@@ -229,8 +229,17 @@ Funktioniert auf derselben Instanz (z. B. nach einem Fehler) oder auf einer ande
 Foundry-Installation.
 
 1. Auf den **„Git Import …"-Button** klicken.
-2. Gewünschte Dateien anhaken → importieren. Referenzierte Bilder/Maps werden
+2. Unter **Importziel** die Welt, ein entsperrtes Welt-Kompendium desselben
+   Typs oder **Neues Welt-Kompendium …** wählen. Beim Import in ein Kompendium
+   werden die ursprünglichen Ordnerpfade darin wiederhergestellt; **Beim Import
+   überschreiben** aktualisiert vorhandene Einträge mit derselben ID.
+3. Gewünschte Dateien anhaken → importieren. Referenzierte Bilder/Maps werden
    automatisch mit wiederhergestellt.
+
+Der **Ziel-Ordner für Assets** ist ein Präfix relativ zu Foundrys Benutzer-Daten.
+Bei `worlds/cyberpunk-red/custom/Items` wird `Item/Bungee_Cord.png` beispielsweise
+als `worlds/cyberpunk-red/custom/Items/Item/Bungee_Cord.png` abgelegt. Ohne Präfix
+bleibt `Item/Bungee_Cord.png` direkt unterhalb der Benutzer-Daten.
 
 Das Modul liest beim Import direkt den aktuellen Stand aus GitHub – ein manuelles
 Nachladen ist nicht nötig.

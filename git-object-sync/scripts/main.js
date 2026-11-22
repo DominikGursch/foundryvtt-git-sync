@@ -581,9 +581,9 @@ async function exportDeltaStatus({ folder, fileName, json }, tree, exportPaths) 
 }
 
 /** Compare an import preview with the corresponding local document. */
-function importDeltaStatus(type, entry, data, flatten, withAssets) {
-  const id = entry.base.match(/__([A-Za-z0-9]+)\.json$/i)?.[1];
-  const local = id ? TYPE_CONFIG[type].collection().get(id) : null;
+function importDeltaStatus(type, entry, data, flatten, withAssets, collection = TYPE_CONFIG[type].collection()) {
+  const id = data._id ?? entry.base.match(/__([A-Za-z0-9]+)\.json$/i)?.[1];
+  const local = id ? collection.get(id) : null;
   if (!local) return "new";
   const { json } = buildExportJson(local, flatten, withAssets);
   return documentContentStatus(json, data);
@@ -876,9 +876,10 @@ async function importDataDoc(type, data, folderOpts = {}) {
  * Load an import entry (including assets) and import it as a document.
  * `tree` is passed once in GitHub mode to avoid repeated requests.
  * `opts` overrides the global settings for this import
- * ({ assetPrefix, folderMode, folderName }).
+ * ({ assetPrefix, folderMode, folderName, packCollection }).
  */
 async function importValue(type, value, tree = null, opts = {}) {
+  const pack = opts.packCollection ? getImportTargetPack(type, opts.packCollection) : null;
   const withAssets = syncAssets();
   const prefix = opts.assetPrefix ?? importAssetPrefix();
   const sha = (tree ?? (await githubTree())).get(value);
@@ -889,6 +890,10 @@ async function importValue(type, value, tree = null, opts = {}) {
   if (withAssets) await restoreAssetsGithub(data, tree ?? (await githubTree()), prefix);
   // After restoring assets, update references to point to the destination.
   rewriteAssetPaths(data, prefix);
+  if (pack) {
+    const path = foundry.utils.getProperty(data, `flags.${MODULE_ID}.folderPath`);
+    return importCompendiumDataDoc(pack, data, path ?? []);
+  }
   return importDataDoc(type, data, { folderMode: opts.folderMode, folderName: opts.folderName });
 }
 
@@ -908,6 +913,29 @@ async function importValue(type, value, tree = null, opts = {}) {
 /** Return all GM-owned world compendiums (excluding module/system compendiums). */
 function worldPacks() {
   return game.packs.filter((p) => p.metadata.packageType === "world");
+}
+
+function importTargetPacks(type) {
+  return worldPacks().filter((pack) => pack.documentName === type && !pack.locked);
+}
+
+function getImportTargetPack(type, collection) {
+  const pack = importTargetPacks(type).find((candidate) => candidate.collection === collection);
+  if (!pack) throw new Error(t("GOS.Notify.InvalidImportPack"));
+  return pack;
+}
+
+function createWorldPack(type, label, name) {
+  const cls = foundry.documents?.collections?.CompendiumCollection ?? CompendiumCollection;
+  return cls.createCompendium({ type, label, name });
+}
+
+function createImportTargetPack(type, label) {
+  if (!label) throw new Error(t("GOS.Notify.MissingImportPackName"));
+  const base = label.slugify({ strict: true }) || "git-import";
+  let name = base;
+  for (let n = 2; game.packs.has(`world.${name}`); n++) name = `${base}-${n}`;
+  return createWorldPack(type, label, name);
 }
 
 /** Find a world compendium by its stable collection ID, falling back to its label for legacy exports. */
@@ -933,15 +961,10 @@ async function resolveOrCreateWorldPack(type, meta, packCache) {
   if (packCache.has(key)) return packCache.get(key);
   let pack = findLocalWorldPack(type, meta);
   if (!pack) {
-    const CompendiumCollectionCls = foundry.documents?.collections?.CompendiumCollection ?? CompendiumCollection;
     const sourceName = collection.startsWith("world.")
       ? collection.slice("world.".length)
       : collection || label;
-    pack = await CompendiumCollectionCls.createCompendium({
-      type,
-      label,
-      name: sourceName.slugify({ strict: true }) || label.slugify({ strict: true })
-    });
+    pack = await createWorldPack(type, label, sourceName.slugify({ strict: true }) || label.slugify({ strict: true }));
   }
   packCache.set(key, pack);
   return pack;
@@ -1046,13 +1069,12 @@ async function compendiumImportDeltaStatus(meta, data, flatten, withAssets) {
  * (see ensureCompendiumFolderPath), then set `data.folder` to the resolved
  * leaf folder ID.
  */
-async function importCompendiumDataDoc(pack, data) {
+async function importCompendiumDataDoc(pack, data, path = foundry.utils.getProperty(data, `flags.${MODULE_ID}.compendium.folderPath`)) {
   assertImportCompatible(pack.documentName, data);
   migrateImportData(pack.documentName, data);
   const cls = getDocumentClass(pack.documentName);
   const existing = data._id ? await pack.getDocument(data._id) : null;
   const overwrite = game.settings.get(MODULE_ID, "overwriteImport");
-  const path = foundry.utils.getProperty(data, `flags.${MODULE_ID}.compendium.folderPath`) || [];
   data.folder = Array.isArray(path) && path.length ? await ensureCompendiumFolderPath(pack, path) : null;
 
   if (existing) {
@@ -1147,7 +1169,7 @@ function readExportOptions(root) {
 }
 
 /** Import dialog options (asset destination, folder mode, and delta filter). */
-function importOptionsHtml() {
+function importOptionsHtml(type) {
   const prefix = importAssetPrefix();
   const mode = importFolderMode();
   const name = importFolderName();
@@ -1155,10 +1177,24 @@ function importOptionsHtml() {
     `<option value="${v}" ${mode === v ? "selected" : ""}>${escHtml(label)}</option>`;
   return `
     <label class="gos-opt gos-opt--col">
+      <span>${t("GOS.Dialog.OptImportDestination")}</span>
+      <select class="gos-opt-import-destination">
+        <option value="">${t("GOS.Dialog.ImportToWorld")}</option>
+        ${importTargetPacks(type).sort((a, b) => a.title.localeCompare(b.title)).map((pack) =>
+          `<option value="${escHtml(pack.collection)}">${escHtml(pack.title)}</option>`
+        ).join("")}
+        <option value=":new">${t("GOS.Dialog.ImportToNewPack")}</option>
+      </select>
+    </label>
+    <label class="gos-opt gos-opt--col gos-opt-import-pack-name gos-hidden">
+      <span>${t("GOS.Dialog.ImportPackName")}</span>
+      <input type="text"/>
+    </label>
+    <label class="gos-opt gos-opt--col">
       <span>${t("GOS.Dialog.OptAssetTarget")}</span>
       <input type="text" class="gos-opt-assetprefix" value="${escHtml(prefix)}" placeholder="z. B. git-import"/>
     </label>
-    <label class="gos-opt gos-opt--col">
+    <label class="gos-opt gos-opt--col gos-opt-world-folder">
       <span>${t("GOS.Dialog.OptFolderMode")}</span>
       <select class="gos-opt-foldermode">
         ${opt("original", t("GOS.Settings.ImportFolderMode.Original"))}
@@ -1166,7 +1202,7 @@ function importOptionsHtml() {
         ${opt("custom", t("GOS.Settings.ImportFolderMode.Custom"))}
       </select>
     </label>
-    <label class="gos-opt gos-opt--col">
+    <label class="gos-opt gos-opt--col gos-opt-world-folder">
       <span>${t("GOS.Dialog.OptFolderName")}</span>
       <input type="text" class="gos-opt-foldername" value="${escHtml(name)}" placeholder="z. B. Git Import"/>
     </label>
@@ -1182,6 +1218,44 @@ function readImportOptions(root) {
     folderMode: root.querySelector(".gos-opt-foldermode")?.value || undefined,
     folderName: (root.querySelector(".gos-opt-foldername")?.value ?? "").trim()
   };
+}
+
+function wireImportDestination(root, type, entries, flatten, withAssets) {
+  const target = root.querySelector(".gos-opt-import-destination");
+  const rows = Array.from(root.querySelectorAll(".gos-row"));
+  const byValue = new Map(entries.map((entry) => [entry.value, entry]));
+  let revision = 0;
+  const show = (statusFor) => {
+    for (const row of rows) {
+      const status = statusFor(byValue.get(row.querySelector('input[name="gos"]').value));
+      const badge = row.querySelector(".gos-status-badge");
+      row.dataset.status = status || "";
+      badge.className = `gos-badge gos-status-badge ${status ? `gos-badge--${status}` : "gos-hidden"}`;
+      badge.textContent = status ? t(`GOS.Dialog.Status${status[0].toUpperCase()}${status.slice(1)}`) : "";
+    }
+    root.dispatchEvent(new Event("gos-status-change"));
+  };
+  target.addEventListener("change", async () => {
+    const current = ++revision;
+    const destination = target.value;
+    root.querySelector(".gos-opt-import-pack-name").classList.toggle("gos-hidden", destination !== ":new");
+    root.querySelectorAll(".gos-opt-world-folder").forEach((el) => el.classList.toggle("gos-hidden", !!destination));
+    if (!destination) return show((entry) => entry.status);
+    if (destination === ":new") return show((entry) => entry.data ? "new" : null);
+    show(() => null);
+    try {
+      const pack = getImportTargetPack(type, destination);
+      const documents = await pack.getDocuments();
+      if (current !== revision) return;
+      const collection = new Map(documents.map((doc) => [doc.id, doc]));
+      show((entry) => entry.data ? importDeltaStatus(type, entry, entry.data, flatten, withAssets, collection) : null);
+    } catch (err) {
+      if (current !== revision) return;
+      show(() => null);
+      console.warn(`${MODULE_ID} | Sync-Status konnte nicht ermittelt werden: ${destination}`, err);
+      ui.notifications.warn(t("GOS.Notify.ImportError", { error: err.message }));
+    }
+  });
 }
 
 /**
@@ -1221,9 +1295,7 @@ function buildCheckboxList(entries, optionsHtml = "") {
     const desc = e.desc ? `<span class="gos-desc">${esc(e.desc)}</span>` : "";
     const search = esc(`${e.label ?? ""} ${e.desc ?? ""}`.toLowerCase());
     const status = e.status || null;
-    const badge = status
-      ? `<span class="gos-badge gos-badge--${status}">${esc(statusLabels[status] ?? status)}</span>`
-      : "";
+    const badge = `<span class="gos-badge gos-status-badge ${status ? `gos-badge--${status}` : "gos-hidden"}">${esc(statusLabels[status] ?? status ?? "")}</span>`;
     const compatLevel = e.compat?.level;
     const compatBadge = compatLevel && compatLevel !== "ok"
       ? `<span class="gos-badge gos-badge--compat-${esc(compatLevel)}" title="${esc(e.compat.reasons.join("\n"))}">${esc(compatLabels[compatLevel] ?? compatLevel)}</span>`
@@ -1608,6 +1680,7 @@ function wireSelectAll(dialogElement) {
     };
     search?.addEventListener("input", applyFilters);
     deltaFilter?.addEventListener("change", applyFilters);
+    root.addEventListener("gos-status-change", applyFilters);
     applyFilters(); // Anfangszustand (Delta-Filter-Default) sofort anwenden.
   }
 }
@@ -1624,7 +1697,11 @@ function readSelected(dialogElement) {
  * classic dialog otherwise or if an error occurs. `onConfirm` receives the
  * root HTMLElement of the dialog content.
  */
-async function openSelectionDialog({ title, content, confirmLabel, confirmIcon, onConfirm }) {
+async function openSelectionDialog({ title, content, confirmLabel, confirmIcon, onConfirm, onRender }) {
+  const render = (root) => {
+    wireSelectAll(root);
+    onRender?.(root);
+  };
   const DV2 = foundry.applications?.api?.DialogV2;
   if (DV2) {
     try {
@@ -1644,7 +1721,7 @@ async function openSelectionDialog({ title, content, confirmLabel, confirmIcon, 
           },
           { action: "cancel", label: t("GOS.Dialog.Cancel") }
         ],
-        render: (event, dialog) => wireSelectAll(dialog.element ?? dialog)
+        render: (event, dialog) => render(dialog.element ?? dialog)
       });
       return;
     } catch (err) {
@@ -1679,7 +1756,7 @@ async function openSelectionDialog({ title, content, confirmLabel, confirmIcon, 
           },
           cancel: { label: t("GOS.Dialog.Cancel") }
         },
-        render: (html) => wireSelectAll(html?.[0] ?? html),
+        render: (html) => render(html?.[0] ?? html),
         close: () => resolve()
       },
       { classes: ["git-object-sync-dialog"], resizable: true }
@@ -1871,6 +1948,8 @@ async function openImportDialog(type) {
       loadProgress.update(loaded / items.length);
       return {
         value: it.value,
+        base: it.base,
+        data,
         label: data?.name || nice || it.base,
         ...buildImportImgInfo(pickImg(data ?? {}), tree),
         desc: docSummary(data ?? {}),
@@ -1885,15 +1964,28 @@ async function openImportDialog(type) {
 
   await openSelectionDialog({
     title: t("GOS.Dialog.ImportTitle", { label }),
-    content: buildCheckboxList(entries, importOptionsHtml()),
+    content: buildCheckboxList(entries, importOptionsHtml(type)),
     confirmLabel: t("GOS.Dialog.ImportButton"),
     confirmIcon: "fa-solid fa-download",
+    onRender: (root) => wireImportDestination(root, type, entries, flatten, withAssets),
     onConfirm: async (root) => {
       const selected = readSelected(root);
       if (!selected.length) return ui.notifications.warn(t("GOS.Dialog.NothingSelected"));
       const opts = readImportOptions(root);
+      const destination = root.querySelector(".gos-opt-import-destination").value;
+      const packName = root.querySelector(".gos-opt-import-pack-name input").value.trim();
       const values = await filterImportSelection(selected, compatByValue);
       if (!values.length) return;
+      try {
+        if (destination === ":new") {
+          opts.packCollection = (await createImportTargetPack(type, packName)).collection;
+        } else if (destination) {
+          opts.packCollection = getImportTargetPack(type, destination).collection;
+        }
+      } catch (err) {
+        console.error(`${MODULE_ID} | Import`, err);
+        return ui.notifications.error(t("GOS.Notify.ImportError", { error: err.message }));
+      }
       let count = 0;
       const progress = makeProgress(t("GOS.Progress.Importing"));
       for (let i = 0; i < values.length; i++) {

@@ -34,6 +34,46 @@ const item = (name) => ({
   toObject: () => ({ _id: id, name })
 });
 
+test("world JSON imports into an unlocked target pack, preserving ID and applying the asset prefix", async () => {
+  const data = { _id: id, name: "Old name", img: "Item/rope.png", _stats: { systemId: "test-system" } };
+  const ctx = loadModule(async () => Response.json({ content: Buffer.from(JSON.stringify(data)).toString("base64") }));
+  const created = [];
+  const updated = [];
+  const pack = {
+    collection: "world.gear", documentName: "Item", metadata: { packageType: "world" },
+    locked: false, getDocument: async (key) => created.find(([doc]) => doc._id === key)
+      ? { update: async (doc) => updated.push(doc) } : null
+  };
+  ctx.game.packs = { filter: (fn) => [pack].filter(fn) };
+  ctx.game.system = { id: "test-system" };
+  ctx.game.release = { generation: 12 };
+  ctx.game.settings.get = (_, key) => ({ githubRepo: "example/content", githubToken: "test", overwriteImport: true })[key];
+  ctx.foundry.utils.getProperty = (obj, path) => path.split(".").reduce((value, key) => value?.[key], obj);
+  ctx.getDocumentClass = () => ({ create: async (doc, opts) => created.push([doc, opts]) });
+  const opts = { packCollection: pack.collection, assetPrefix: "worlds/example/custom/Items" };
+  const tree = new Map([[oldPath, "blob-sha"]]);
+
+  assert.equal(await ctx.importValue("Item", oldPath, tree, opts), "created");
+  assert.equal(created[0][0]._id, id);
+  assert.equal(created[0][0].img, "worlds/example/custom/Items/Item/rope.png");
+  assert.equal(created[0][1].pack, pack.collection);
+  assert.equal(created[0][1].keepId, true);
+  assert.equal(await ctx.importValue("Item", oldPath, tree, opts), "updated");
+  assert.equal(updated[0]._id, id);
+  assert.equal(created.length, 1);
+  pack.locked = true;
+  await assert.rejects(ctx.importValue("Item", oldPath, tree, opts), /InvalidImportPack/);
+});
+
+test("creating an import destination does not reuse a colliding compendium ID", async () => {
+  const ctx = loadModule();
+  ctx.game.packs = new Map([["world.gear", {}]]);
+  ctx.foundry.documents = { collections: { CompendiumCollection: { createCompendium: async (data) => data } } };
+  const pack = await ctx.createImportTargetPack("Item", { slugify: () => "gear" });
+  assert.equal(pack.name, "gear-2");
+  assert.equal(pack.type, "Item");
+});
+
 test("export status compares a renamed item to its original path", async () => {
   const { buildExportJson, gitBlobSha1, indexExportPaths, exportDeltaStatus } = loadModule(async () =>
     Response.json({ content: Buffer.from(prior.json).toString("base64") })
