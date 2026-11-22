@@ -40,6 +40,8 @@
   "GOS.Notify.Exported": "{count} Objekt(e) und {assets} Asset(s) exportiert.",
   "GOS.Notify.Imported": "{count} Objekt(e) importiert.",
   "GOS.Notify.ExportError": "Export fehlgeschlagen: {error}",
+  "GOS.Notify.AmbiguousExportPath": "Mehrere Exportdateien mit derselben ID wie „{path}“ gefunden. Bitte behalte nur die gewünschte Datei in GitHub und exportiere dann erneut.",
+  "GOS.Notify.IncompleteTree": "GitHub hat nur einen Teil des Dateibaums geliefert. Die vorhandenen Exportdateien konnten nicht zuverlässig ermittelt werden.",
   "GOS.Notify.ImportError": "Import fehlgeschlagen: {error}",
   "GOS.Notify.DialogError": "Dialog konnte nicht geöffnet werden: {error}",
   "GOS.Progress.Exporting": "Exportiere …",

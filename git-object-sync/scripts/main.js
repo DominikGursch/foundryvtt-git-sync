@@ -273,14 +273,14 @@ async function githubPushFiles(files, message, onProgress = null) {
     }
   }
 
-  const tree = [];
+  const blobs = [];
   for (const f of files) {
     const blobBody = f.bytes
       ? { content: bytesToBase64(f.bytes), encoding: "base64" }
       : { content: f.text, encoding: "utf-8" };
     const blob = await ghApi(`/repos/${repo}/git/blobs`, { method: "POST", body: blobBody });
-    tree.push({ path: f.path, mode: "100644", type: "blob", sha: blob.sha });
-    onProgress?.(tree.length, files.length + 1);
+    blobs.push({ path: f.path, matchExportId: f.matchExportId, sha: blob.sha });
+    onProgress?.(blobs.length, files.length + 1);
   }
 
   // Fetch the current branch state (tip commit and corresponding tree).
@@ -299,6 +299,13 @@ async function githubPushFiles(files, message, onProgress = null) {
   const maxAttempts = 8;
   let lastErr = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Resolve against the same tree we write to, including after a concurrent export.
+    const exportPaths = indexExportPaths(baseTree ? await readGithubTree(repo, baseTree) : new Map());
+    const tree = blobs.map((file) => {
+      const path = file.matchExportId ? resolveExportPath(file.path, exportPaths) : file.path;
+      if (path === null) throw new Error(t("GOS.Notify.AmbiguousExportPath", { path: file.path }));
+      return { path, mode: "100644", type: "blob", sha: file.sha };
+    });
     const newTree = await ghApi(`/repos/${repo}/git/trees`, {
       method: "POST",
       body: { ...(baseTree ? { base_tree: baseTree } : {}), tree }
@@ -333,17 +340,24 @@ async function githubPushFiles(files, message, onProgress = null) {
   throw new Error(t("GOS.Notify.PushConflict", { detail }));
 }
 
-/** Fetch the branch's complete file tree as a map of path -> blob SHA. */
+/** Fetch a complete file tree as a map of path -> blob SHA. */
+async function readGithubTree(repo, ref) {
+  const data = await ghApi(`/repos/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`);
+  if (data.truncated) throw new Error(t("GOS.Notify.IncompleteTree"));
+  const map = new Map();
+  for (const e of data.tree) if (e.type === "blob") map.set(e.path, e.sha);
+  return map;
+}
+
 async function githubTree() {
   const { repo, branch } = ghConfig();
-  const map = new Map();
   try {
-    const data = await ghApi(`/repos/${repo}/git/trees/${branch}?recursive=1`);
-    for (const e of data.tree || []) if (e.type === "blob") map.set(e.path, e.sha);
+    return await readGithubTree(repo, branch);
   } catch (err) {
-    // The branch does not exist yet, so return an empty tree.
+    // A missing branch or an empty repository has no exported documents yet.
+    if (/^GitHub (404|409):/.test(err.message)) return new Map();
+    throw err;
   }
-  return map;
 }
 
 async function githubReadBlob(sha) {
@@ -471,7 +485,9 @@ async function pushExportBundle(jsonWrites, assetMap) {
   const progress = makeProgress(t("GOS.Progress.Exporting"));
   try {
     const files = [];
-    for (const w of jsonWrites) files.push({ path: `${w.folder}/${w.fileName}`, text: w.json });
+    for (const w of jsonWrites) {
+      files.push({ path: `${w.folder}/${w.fileName}`, text: w.json, matchExportId: true });
+    }
     let assets = 0;
     const assetList = [...assetMap.entries()]; // [dest, src]
     for (let i = 0; i < assetList.length; i++) {
@@ -502,6 +518,29 @@ async function pushExportBundle(jsonWrites, assetMap) {
 /*  Delta detection (sync status for export/import dialogs)                    */
 /* -------------------------------------------------------------------------- */
 
+function exportPathKey(path) {
+  const id = basename(path).match(/__([A-Za-z0-9]+)\.json$/i)?.[1];
+  return id ? `${dirname(path)}/${id}` : null;
+}
+
+function indexExportPaths(tree) {
+  const index = new Map();
+  for (const path of tree.keys()) {
+    const key = exportPathKey(path);
+    if (!key) continue;
+    if (!index.has(key)) index.set(key, []);
+    index.get(key).push(path);
+  }
+  return index;
+}
+
+function resolveExportPath(proposedPath, index) {
+  const matches = index.get(exportPathKey(proposedPath));
+  if (!matches || matches.includes(proposedPath)) return proposedPath;
+  // Keep the existing path after a name change, but don't guess among old duplicates.
+  return matches.length === 1 ? matches[0] : null;
+}
+
 /**
  * Determine the sync status of a local document against the GitHub repository:
  * "new" (never exported), "changed" (content differs from the repository), or
@@ -509,11 +548,10 @@ async function pushExportBundle(jsonWrites, assetMap) {
  * downloading the file contents. Uses the same export settings (assets/shared
  * folders) as an actual export, so different settings can make the status inaccurate.
  */
-async function exportDeltaStatus(doc, tree, flatten, withAssets) {
-  const cfg = TYPE_CONFIG[doc.documentName];
-  if (!cfg) return "new";
-  const { folder, fileName, json } = buildExportJson(doc, flatten, withAssets);
-  const remoteSha = tree.get(`${folder}/${fileName}`);
+async function exportDeltaStatus({ folder, fileName, json }, tree, exportPaths) {
+  const path = resolveExportPath(`${folder}/${fileName}`, exportPaths);
+  if (path === null) return "changed"; // Historical duplicates need attention.
+  const remoteSha = tree.get(path);
   if (!remoteSha) return "new";
   const localSha = await gitBlobSha1(json);
   return localSha === remoteSha ? "unchanged" : "changed";
@@ -959,15 +997,6 @@ async function exportCompendiumDocuments(entries, opts = {}) {
   }
 
   return pushExportBundle(jsonWrites, assetMap);
-}
-
-/** Determine a compendium document's sync status against GitHub (see exportDeltaStatus). */
-async function compendiumExportDeltaStatus(doc, pack, tree, flatten, withAssets) {
-  const { folder, fileName, json } = buildCompendiumExportJson(doc, pack, flatten, withAssets);
-  const remoteSha = tree.get(`${folder}/${fileName}`);
-  if (!remoteSha) return "new";
-  const localSha = await gitBlobSha1(json);
-  return localSha === remoteSha ? "unchanged" : "changed";
 }
 
 /** List available compendium import entries from an already loaded tree. */
@@ -1661,6 +1690,7 @@ async function openExportDialog(type) {
   }
   const withAssets = syncAssets();
   const flatten = exportFlattenAssets();
+  const exportPaths = tree && indexExportPaths(tree);
 
   const entries = await Promise.all(
     docs.map(async (d) => {
@@ -1671,7 +1701,7 @@ async function openExportDialog(type) {
         img: thumbUrl(pickImg(src)),
         desc: docSummary(src),
         group: groupLabel(type, src.type),
-        status: tree ? await exportDeltaStatus(d, tree, flatten, withAssets) : null
+        status: tree ? await exportDeltaStatus(buildExportJson(d, flatten, withAssets), tree, exportPaths) : null
       };
     })
   );
@@ -1721,6 +1751,7 @@ async function openCompendiumExportDialog() {
   }
   const withAssets = syncAssets();
   const flatten = exportFlattenAssets();
+  const exportPaths = tree && indexExportPaths(tree);
 
   const entries = [];
   for (const pack of packs) {
@@ -1733,7 +1764,7 @@ async function openCompendiumExportDialog() {
         img: thumbUrl(pickImg(src)),
         desc: docSummary(src),
         group: pack.title,
-        status: tree ? await compendiumExportDeltaStatus(d, pack, tree, flatten, withAssets) : null
+        status: tree ? await exportDeltaStatus(buildCompendiumExportJson(d, pack, flatten, withAssets), tree, exportPaths) : null
       });
     }
   }

@@ -217,6 +217,10 @@ Nach der Einrichtung bleibst du komplett in Foundry.
    Objekte anhaken).
 2. Das Modul sichert die Objekte **inklusive Bilder/Maps** direkt zu GitHub (sofort).
 
+Wenn du ein Objekt umbenennst und erneut exportierst, wird der Anzeigename in
+der vorhandenen JSON-Datei aktualisiert. Die Foundry-ID und der Dateipfad auf
+GitHub bleiben gleich. Bereits vorhandene Duplikate werden nicht automatisch gelöscht.
+
 ### Etwas wiederherstellen (Importieren)
 
 Funktioniert auf derselben Instanz (z. B. nach einem Fehler) oder auf einer anderen

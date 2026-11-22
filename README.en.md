@@ -223,6 +223,10 @@ Once set up, you stay entirely inside Foundry.
 2. The module backs up the objects **including images/maps** directly to
    GitHub (immediately).
 
+When you rename an object and export it again, its display name is updated in
+the existing JSON file. The Foundry ID and GitHub file path stay the same.
+Existing duplicates are not deleted automatically.
+
 ### Restoring something (Import)
 
 Works on the same instance (e.g. after an error) or on a different Foundry
