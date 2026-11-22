@@ -19,7 +19,7 @@ function loadModule(fetch) {
       const target = keys.reduce((obj, key) => (obj[key] ??= {}), data);
       target[prop] = value;
     } } },
-    TextEncoder, crypto: webcrypto, fetch,
+    TextEncoder, TextDecoder, atob, crypto: webcrypto, fetch,
     setTimeout: (callback) => callback()
   });
   runInContext(source, context);
@@ -35,7 +35,9 @@ const item = (name) => ({
 });
 
 test("export status compares a renamed item to its original path", async () => {
-  const { buildExportJson, gitBlobSha1, indexExportPaths, exportDeltaStatus } = loadModule();
+  const { buildExportJson, gitBlobSha1, indexExportPaths, exportDeltaStatus } = loadModule(async () =>
+    Response.json({ content: Buffer.from(prior.json).toString("base64") })
+  );
   const renamed = buildExportJson(item("New name"), false, false);
   const prior = buildExportJson(item("Old name"), false, false);
   const otherPath = `compendia/world.gear/Other_name__${id}.json`;
@@ -45,6 +47,40 @@ test("export status compares a renamed item to its original path", async () => {
   assert.equal(await exportDeltaStatus(renamed, tree, indexExportPaths(tree)), "changed");
   tree.set(oldPath, await gitBlobSha1(renamed.json));
   assert.equal(await exportDeltaStatus(renamed, tree, indexExportPaths(tree)), "unchanged");
+});
+
+test("re-export after import ignores only top-level Foundry timestamps and JSON formatting", async () => {
+  const path = `items/Bungee_Cord__${id}.json`;
+  const remote = { name: "Bungee-Seil", _id: id, _stats: { createdTime: 1, modifiedTime: 2, coreVersion: "12" } };
+  const raw = `${JSON.stringify(remote, null, 2)}\n`;
+  const { gitBlobSha1, indexExportPaths, exportDeltaStatus, documentContentStatus } = loadModule(async () =>
+    Response.json({ content: Buffer.from(raw).toString("base64") })
+  );
+  const local = { _id: id, _stats: { coreVersion: "12", modifiedTime: 3, createdTime: 3 }, name: remote.name };
+  const tree = new Map([[path, await gitBlobSha1(raw)]]);
+  assert.equal(await exportDeltaStatus({
+    folder: "items", fileName: `Bungee-Seil__${id}.json`, json: JSON.stringify(local)
+  }, tree, indexExportPaths(tree)), "unchanged");
+  assert.equal(documentContentStatus(JSON.stringify({
+    ...local, _stats: { ...local._stats, coreVersion: "13" }
+  }), remote), "changed");
+  assert.equal(documentContentStatus(JSON.stringify({ ...local, system: { values: [2, 1] } }), {
+    ...remote, system: { values: [1, 2] }
+  }), "changed");
+});
+
+test("import compares preview data without downloading it again", () => {
+  const { game, buildExportJson, importDeltaStatus } = loadModule();
+  const local = item("Old name");
+  local.toObject = () => ({
+    _id: id, name: local.name, img: "Item/rope.png", _stats: { createdTime: 3, modifiedTime: 3 }
+  });
+  game.items = new Map([[id, local]]);
+  const prior = JSON.parse(buildExportJson(local, false, false).json);
+  prior._stats = { createdTime: 1, modifiedTime: 2 };
+  const entry = { base: `Old_name__${id}.json` };
+  assert.equal(importDeltaStatus("Item", entry, prior, false, false), "unchanged");
+  assert.equal(importDeltaStatus("Item", entry, { ...prior, img: "Item/other.png" }, false, false), "changed");
 });
 
 test("a concurrent first export is updated rather than duplicated after retry", async () => {

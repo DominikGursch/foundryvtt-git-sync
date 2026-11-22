@@ -194,8 +194,10 @@ Export- und Import-Dialog markieren jedes Objekt mit einem Status-Badge:
 - **Geändert** — Datei bzw. Dokument existiert bereits, der Inhalt weicht aber ab.
 - **Unverändert** — Inhalt ist identisch zum letzten Export/Import.
 
-Der Status wird lokal per Git-Blob-Hash-Vergleich ermittelt (kein zusätzlicher
-Download nötig). Über die Checkbox **„Unveränderte Objekte ausblenden"** direkt im
+Der Status vergleicht den JSON-Inhalt und ignoriert die Formatierung sowie
+`_stats.createdTime` und `_stats.modifiedTime`. Im Exportdialog wird das JSON
+nur bei einem abweichenden Git-Blob-Hash von GitHub geladen.
+Über die Checkbox **„Unveränderte Objekte ausblenden"** direkt im
 Dialog kannst du unveränderte Einträge ausblenden und siehst so nur die Deltas.
 Das globale Modul-Setting **„Standardmäßig unveränderte Objekte ausblenden"**
 (Standard: aktiviert) legt nur den Vorgabewert dieser Checkbox fest.

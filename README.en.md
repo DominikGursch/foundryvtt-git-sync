@@ -199,8 +199,10 @@ The export and import dialogs mark every object with a status badge:
 - **Changed** — the file/document already exists, but the content differs.
 - **Unchanged** — the content is identical to the last export/import.
 
-The status is determined locally via a git blob hash comparison (no extra
-download needed). Using the **"Hide unchanged objects"** checkbox right in
+The status compares JSON content, ignoring formatting and the
+`_stats.createdTime` and `_stats.modifiedTime` timestamps. The export dialog
+downloads the JSON from GitHub only when its Git blob hash differs.
+Using the **"Hide unchanged objects"** checkbox right in
 the dialog, you can hide unchanged entries and see only the deltas. The
 global module setting **"Hide unchanged objects by default"** (default: on)
 only controls the default state of that checkbox.

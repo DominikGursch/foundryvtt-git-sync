@@ -541,36 +541,52 @@ function resolveExportPath(proposedPath, index) {
   return matches.length === 1 ? matches[0] : null;
 }
 
+function comparableDocumentJson(data) {
+  const stats = data._stats;
+  if (stats && typeof stats === "object" && !Array.isArray(stats)) {
+    const { createdTime, modifiedTime, ...stableStats } = stats;
+    data = { ...data, _stats: stableStats };
+  }
+  return JSON.stringify(data, (_, value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]]));
+  });
+}
+
+function documentContentStatus(localJson, remoteData) {
+  if (!remoteData || typeof remoteData !== "object" || Array.isArray(remoteData)) {
+    throw new Error("Expected a JSON document object");
+  }
+  return comparableDocumentJson(JSON.parse(localJson)) === comparableDocumentJson(remoteData)
+    ? "unchanged" : "changed";
+}
+
 /**
  * Determine the sync status of a local document against the GitHub repository:
- * "new" (never exported), "changed" (content differs from the repository), or
- * "unchanged" (identical to the last export). Compare Git blob SHAs to avoid
- * downloading the file contents. Uses the same export settings (assets/shared
- * folders) as an actual export, so different settings can make the status inaccurate.
+ * only fetch the remote JSON if the blob differs, since formatting and
+ * timestamps alone do not make a document changed.
  */
 async function exportDeltaStatus({ folder, fileName, json }, tree, exportPaths) {
   const path = resolveExportPath(`${folder}/${fileName}`, exportPaths);
   if (path === null) return "changed"; // Historical duplicates need attention.
   const remoteSha = tree.get(path);
   if (!remoteSha) return "new";
-  const localSha = await gitBlobSha1(json);
-  return localSha === remoteSha ? "unchanged" : "changed";
+  try {
+    if (await gitBlobSha1(json) === remoteSha) return "unchanged";
+    return documentContentStatus(json, await readEntryData(path, tree));
+  } catch (err) {
+    console.warn(`${MODULE_ID} | Sync-Status konnte nicht ermittelt werden: ${path}`, err);
+    return null;
+  }
 }
 
-/**
- * Determine the sync status of an import entry against the local document:
- * "new" (no local document with this ID), "changed" (a local document exists
- * but its content differs from the repository), or "unchanged" (exporting the
- * local document again would produce this exact file, so there is nothing to import).
- */
-async function importDeltaStatus(type, entry, tree, flatten, withAssets) {
+/** Compare an import preview with the corresponding local document. */
+function importDeltaStatus(type, entry, data, flatten, withAssets) {
   const id = entry.base.match(/__([A-Za-z0-9]+)\.json$/i)?.[1];
   const local = id ? TYPE_CONFIG[type].collection().get(id) : null;
   if (!local) return "new";
   const { json } = buildExportJson(local, flatten, withAssets);
-  const localSha = await gitBlobSha1(json);
-  const remoteSha = tree.get(entry.value);
-  return localSha === remoteSha ? "unchanged" : "changed";
+  return documentContentStatus(json, data);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1013,16 +1029,14 @@ function listCompendiumImportEntriesFromTree(tree) {
  * `meta` contains the exported compendium metadata from
  * `flags.<MODULE_ID>.compendium`.
  */
-async function compendiumImportDeltaStatus(meta, data, tree, entryValue, flatten, withAssets) {
+async function compendiumImportDeltaStatus(meta, data, flatten, withAssets) {
   if (!data?._id || !meta?.type) return "new";
   const pack = findLocalWorldPack(meta.type, meta);
   if (!pack) return "new";
   const local = await pack.getDocument(data._id);
   if (!local) return "new";
   const { json } = buildCompendiumExportJson(local, pack, flatten, withAssets);
-  const localSha = await gitBlobSha1(json);
-  const remoteSha = tree.get(entryValue);
-  return localSha === remoteSha ? "unchanged" : "changed";
+  return documentContentStatus(json, data);
 }
 
 /**
@@ -1692,8 +1706,11 @@ async function openExportDialog(type) {
   const flatten = exportFlattenAssets();
   const exportPaths = tree && indexExportPaths(tree);
 
-  const entries = await Promise.all(
-    docs.map(async (d) => {
+  const entries = [];
+  // A blob mismatch may require a download; bound parallel GitHub requests.
+  const batchSize = 8;
+  for (let i = 0; i < docs.length; i += batchSize) {
+    const batch = await Promise.all(docs.slice(i, i + batchSize).map(async (d) => {
       const src = d.toObject();
       return {
         value: d.id,
@@ -1703,8 +1720,9 @@ async function openExportDialog(type) {
         group: groupLabel(type, src.type),
         status: tree ? await exportDeltaStatus(buildExportJson(d, flatten, withAssets), tree, exportPaths) : null
       };
-    })
-  );
+    }));
+    entries.push(...batch);
+  }
   const content = docs.length
     ? buildCheckboxList(entries, exportOptionsHtml())
     : `<p>${t("GOS.Dialog.NothingSelected")}</p>`;
@@ -1845,7 +1863,7 @@ async function openImportDialog(type) {
         console.warn(`${MODULE_ID} | Vorschau übersprungen: ${it.value}`, err);
       }
       try {
-        status = await importDeltaStatus(type, it, tree, flatten, withAssets);
+        if (data) status = importDeltaStatus(type, it, data, flatten, withAssets);
       } catch (err) {
         console.warn(`${MODULE_ID} | Sync-Status konnte nicht ermittelt werden: ${it.value}`, err);
       }
@@ -1925,7 +1943,7 @@ async function openCompendiumImportDialog() {
       }
       const meta = data ? foundry.utils.getProperty(data, `flags.${MODULE_ID}.compendium`) : null;
       try {
-        status = meta ? await compendiumImportDeltaStatus(meta, data, tree, it.value, flatten, withAssets) : "new";
+        if (data) status = meta ? await compendiumImportDeltaStatus(meta, data, flatten, withAssets) : "new";
       } catch (err) {
         console.warn(`${MODULE_ID} | Sync-Status konnte nicht ermittelt werden: ${it.value}`, err);
       }
