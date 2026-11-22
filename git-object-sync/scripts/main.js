@@ -1554,7 +1554,10 @@ function wireSelectAll(dialogElement) {
         if (match) anyVisible = true;
       }
       for (const g of groups) {
-        const groupHasMatch = g.querySelector(".gos-row:not(.gos-hidden)") !== null;
+        const visibleRows = g.querySelectorAll(".gos-row:not(.gos-hidden)");
+        const groupHasMatch = visibleRows.length > 0;
+        const count = g.querySelector(".gos-group-count");
+        if (count) count.textContent = String(visibleRows.length);
         g.classList.toggle("gos-hidden", !groupHasMatch);
         if (q && groupHasMatch) g.open = true; // Expand matching groups during search.
       }
